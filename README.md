@@ -179,6 +179,23 @@ Coverage percentage measures whether a line *executed* during tests, not whether
 
 ---
 
+## Running gates locally before push
+
+This is a fast-feedback convenience, not a gate — it catches problems
+before a push instead of after one. It doesn't change what's enforced:
+the CI pipeline and `CODEOWNERS` remain the only things that actually
+gate a merge, and `git push --no-verify` skips it entirely.
+
+Each language ships an opt-in pre-push hook (`assets/<lang>/pre-push.sh`)
+that runs Static, Build, Unit (with diff-coverage), and Property locally
+— the four gates that need nothing but your own toolchain. Contract,
+Regression, and Deploy Gate stay CI-only. See
+`adv-framework/references/local-verification.md` for prerequisites,
+the install step, and why three of the CI's static jobs (`sast`,
+`dependency_scanning`, `secret_detection`) aren't mirrored locally.
+
+---
+
 ## Adopting incrementally
 
 Don't stand up all seven layers at once — a pipeline nobody trusts as blocking is worse than no pipeline. Suggested order:
