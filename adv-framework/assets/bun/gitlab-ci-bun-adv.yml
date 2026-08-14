@@ -200,6 +200,8 @@ golden-file-regression:
 
 # ---------------------------------------------------------------------------
 # STAGE 7: DEPLOY GATE
+# For container-scan / DAST / signing hardening, see assets/security/
+# and references/security.md — not included in this base pipeline
 # ---------------------------------------------------------------------------
 
 smoke-test:

@@ -12,6 +12,8 @@ Security checks span multiple gates, not just the static layer, and must be just
 | Regression | Security-relevant golden tests (auth bypass attempts, injection payloads as fixed cases) | Any regression |
 | Deploy Gate | Container image scan, DAST vs staging, artifact signing/provenance | Critical CVE in final image, failed signature verification |
 
+This table describes the target end state, not what ships by default: the base `gitlab-ci-*-adv.yml` pipelines in `assets/` only wire up the seven core gates (deploy-gate contains just smoke-test/deploy/rollback). Everything in this row is opt-in hardening layered on top — and today only the container-scan half has a ready-made asset (see "Ready-to-use asset" below). IaC scanning, DAST, and provenance signing are documented patterns, not bundled CI jobs — add them the same way you'd add container-scan.
+
 ## Tool set beyond language-specific SAST
 
 - **Container/image scanning**: `Trivy` or `Grype`, run against the final built image in the deploy-gate stage — catches CVEs from the base image itself, which source-level SCA never sees.

@@ -9,14 +9,12 @@ flowchart TD
         S4["4 · PROPERTY / INVARIANT<br/>rule holds for all inputs"]
         S5["5 · CONTRACT / INTEGRATION<br/>schemas · migrations · service contracts"]
         S6["6 · REGRESSION<br/>golden-file / snapshot diff"]
-        S7["7 · DEPLOY GATE<br/>smoke test · image scan · DAST · signature verify"]
 
         S1 -->|pass| S2
         S2 -->|pass| S3
         S3 -->|pass| S4
         S4 -->|pass| S5
         S5 -->|pass| S6
-        S6 -->|pass| S7
     end
 
     S1 -->|fail| Blocked["❌ BLOCKED<br/>fix and resubmit — no partial pass"]
@@ -25,12 +23,14 @@ flowchart TD
     S4 -->|fail| Blocked
     S5 -->|fail| Blocked
     S6 -->|fail| Blocked
-    S7 -->|fail| Rollback["⏪ AUTO-ROLLBACK"]
 
-    S7 -->|pass| Gate{"Touches tests /<br/>CI config / suppression files?"}
+    S6 -->|pass| Gate{"Touches tests /<br/>CI config / suppression files?"}
     Gate -->|yes| Human["👤 CODEOWNERS<br/>human approval required"]
-    Gate -->|no| Merged
-    Human -->|approved| Merged(["✅ Merged & Deployed"])
+    Gate -->|no| Merge
+    Human -->|approved| Merge(["Merged to default branch"])
+    Merge --> S7["7 · DEPLOY GATE<br/>smoke test · image scan · DAST · signature verify"]
+    S7 -->|fail| Rollback["⏪ AUTO-ROLLBACK"]
+    S7 -->|pass| Merged(["✅ Deployed"])
 
     Merged -.escaped bug found later.-> Ratchet["Write the deterministic<br/>gate that would've caught it"]
     Ratchet -.suite only grows, never shrinks.-> S1
@@ -46,6 +46,6 @@ flowchart TD
 
     class S1,S2,S3,S4,S5,S6,S7 stage
     class Blocked,Rollback blocked
-    class Merged good
+    class Merge,Merged good
     class Gate,Human,Ratchet gate
     class AntiPattern anti

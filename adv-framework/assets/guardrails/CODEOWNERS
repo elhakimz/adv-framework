@@ -60,7 +60,7 @@
 /bun.lock                      @your-team/leads
 /Cargo.toml                     @your-team/leads
 /Cargo.lock                      @your-team/leads
-/*.csproj                     @your-team/leads
+/**/*.csproj                  @your-team/leads
 
 # ---- Security suppression files: an agent "fixing" a failing scan by
 # suppressing the finding instead of fixing the vulnerability is the

@@ -1,5 +1,5 @@
 # ============================================================================
-# Add these two jobs to the `deploy-gate` stage of any of the four
+# Add these two jobs to the `deploy-gate` stage of any of the seven
 # language-specific .gitlab-ci.yml pipelines. `container-scan` is the
 # actual security gate (blocks on Critical/High per the ADV Security
 # section); `file-security-debt-cards` runs after it and only creates

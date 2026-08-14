@@ -1,4 +1,3 @@
-# adv-framework
 # Automated Deterministic Verification (ADV) Framework
 
 A language-agnostic CI/CD pipeline pattern for minimizing **verification debt** in agentic software development — where AI agents (Claude Code, Antigravity, Gemini CLI, or others) generate a meaningful share of the code.
@@ -43,43 +42,125 @@ Gates run from cheapest/fastest to most expensive/slowest. A failure at any laye
 
 Each implementation follows the same 7-stage structure with stack-appropriate tools. The **isolation mechanism** (how property/regression tests are kept out of the fast default test run) differs per ecosystem — see the note under each.
 
-| Stage | Java | Python | .NET | Go |
-|---|---|---|---|---|
-| Static | Checkstyle, PMD | ruff, mypy, bandit | `dotnet format`, Roslyn analyzers, SecurityCodeScan | golangci-lint, gosec, govulncheck |
-| Build | Maven | `python -m build` | `dotnet build` | `go build` |
-| Unit + coverage | JUnit 5 + JaCoCo | pytest + coverage.py | xUnit + coverlet | `go test -race` + gocov |
-| Property | jqwik | Hypothesis | FsCheck | rapid |
-| Contract | Pact, Schemathesis, Flyway | Pact, Schemathesis, Alembic | Pact.NET, Schemathesis, EF Core | pact-go, Schemathesis, golang-migrate |
-| Regression | golden-file (custom) | syrupy | Verify | goldie |
-| Isolation mechanism | file suffix (`*PropertyTest.java`) | pytest marker (`@pytest.mark.property`) | xUnit trait (`[Trait("Category","Property")]`) | build tag (`//go:build property`) |
+| Stage | Java | Python | .NET | Go | Node.js | Bun | Rust |
+|---|---|---|---|---|---|---|---|
+| Static | Checkstyle, PMD | ruff, mypy, bandit | `dotnet format`, Roslyn analyzers, SecurityCodeScan | golangci-lint, gosec, govulncheck | ESLint, Prettier, `tsc`, `npm audit` | Biome, `tsc` typecheck | rustfmt, clippy, cargo-audit, cargo-deny |
+| Build | Maven | `python -m build` | `dotnet build` | `go build` | `npm run build` | `bun build` | `cargo build --release` |
+| Unit + coverage | JUnit 5 + JaCoCo | pytest + coverage.py | xUnit + coverlet | `go test -race` + gocov | Vitest + coverage | `bun test` + coverage | cargo-nextest + cargo-llvm-cov |
+| Property | jqwik | Hypothesis | FsCheck | rapid | fast-check | fast-check | proptest |
+| Contract | Pact, Schemathesis, Flyway | Pact, Schemathesis, Alembic | Pact.NET, Schemathesis, EF Core | pact-go, Schemathesis, golang-migrate | Pact, Schemathesis, Prisma | Pact, Schemathesis, Drizzle Kit | Pact, Schemathesis, sqlx |
+| Regression | golden-file (custom) | syrupy | Verify | goldie | Vitest snapshot | bun:test snapshot | insta |
+| Isolation mechanism | file suffix (`*PropertyTest.java`) | pytest marker (`@pytest.mark.property`) | xUnit trait (`[Trait("Category","Property")]`) | build tag (`//go:build property`) | separate Vitest config files | directory structure (`tests/unit/`, `tests/property/`, `tests/regression/`) | Cargo's native test-target system (`tests/*.rs`) |
 
 ### Repo structure
 
 ```
 .
-├── .gitlab-ci.yml                  # pick the variant matching your stack
 ├── CODEOWNERS                      # human-approval gate on test/pipeline files
-├── .claude/
-│   └── settings.json               # agent permission scoping (deny/ask lists)
+├── claude-code-settings.json       # agent permission scoping (deny/ask lists)
 │
-├── java/
-│   ├── gitlab-ci-java-adv.yml
-│   └── pom-adv-fragment.xml
-├── python/
-│   ├── gitlab-ci-python-adv.yml
-│   ├── pyproject-adv-fragment.toml
-│   └── test_example_markers.py
-├── dotnet/
-│   ├── gitlab-ci-dotnet-adv.yml
-│   ├── Directory.Build.props
-│   └── ExampleTests.cs
-└── golang/
-    ├── gitlab-ci-golang-adv.yml
-    ├── .golangci.yml
-    ├── calculator_test.go
-    ├── calculator_property_test.go
-    └── report_regression_test.go
+└── adv-framework/                  # the skill itself
+    ├── SKILL.md
+    ├── references/
+    │   ├── gate-structure.md       # full 7-gate table, ratchet rule, isolation mechanisms
+    │   ├── security.md             # security's expanded tool set, blocking policy
+    │   └── kanban-integration.md   # pipeline state → Kanban board state
+    └── assets/
+        ├── java/
+        │   ├── gitlab-ci-java-adv.yml
+        │   └── pom-adv-fragment.xml
+        ├── python/
+        │   ├── gitlab-ci-python-adv.yml
+        │   ├── pyproject-adv-fragment.toml
+        │   └── test_example_markers.py
+        ├── dotnet/
+        │   ├── gitlab-ci-dotnet-adv.yml
+        │   ├── Directory.Build.props
+        │   └── ExampleTests.cs
+        ├── golang/
+        │   ├── gitlab-ci-golang-adv.yml
+        │   ├── .golangci.yml
+        │   ├── calculator_test.go
+        │   ├── calculator_property_test.go
+        │   └── report_regression_test.go
+        ├── nodejs/
+        │   ├── gitlab-ci-nodejs-adv.yml
+        │   ├── eslint.config.js
+        │   ├── vitest.config.ts / vitest.property.config.ts / vitest.regression.config.ts
+        │   └── calculator.test.ts, calculator.property.test.ts, report.regression.test.ts
+        ├── bun/
+        │   ├── gitlab-ci-bun-adv.yml
+        │   ├── biome.json, bunfig.toml
+        │   └── tests/{unit,property,regression}/  # isolation is directory structure, not naming
+        ├── rust/
+        │   ├── gitlab-ci-rust-adv.yml
+        │   ├── deny.toml
+        │   └── src/, tests/  # Cargo's own test-target system provides isolation
+        ├── guardrails/
+        │   ├── CODEOWNERS                  # complete, all-7-ecosystems version
+        │   └── claude-code-settings.json
+        ├── security/
+        │   ├── security-debt-ci-job.yml    # ready-to-use container-scan + Kanban card job
+        │   └── create_security_debt_cards.py
+        └── diagrams/
+            └── adv-framework-diagram.mermaid
 ```
+
+---
+
+## Security
+
+Security checks are not one line item in the static layer — they span multiple stages of the pipeline, and like every other gate in this framework, **they must be deterministic**. A model saying "this looks safe" is the same anti-pattern as an LLM reviewing LLM-written code; a security gate that isn't reproducible isn't a gate.
+
+### Where security sits across the pipeline
+
+| Stage | Security checks | Blocks on |
+|---|---|---|
+| Static | SAST (language-specific: Semgrep, bandit, gosec, SecurityCodeScan), dependency/SCA scanning, secret detection | Any high/critical finding |
+| Build | SBOM generation (attached as artifact, not blocking by itself) | — |
+| Contract | Schema validation prevents unvalidated input shapes reaching handlers | Contract violation |
+| Regression | Security-relevant golden tests (auth bypass attempts, injection payloads as fixed test cases) | Any regression |
+| Deploy Gate | Container image scan, DAST against staging, artifact signing/provenance check | Critical CVE in final image, failed signature verification |
+
+This table is the target end state, not what ships by default — the base `gitlab-ci-*-adv.yml` pipelines only wire up the seven core gates (their deploy-gate stage is just smoke-test/deploy/rollback). Everything in this row is opt-in hardening; today only container-scan has a ready-made CI job (`adv-framework/assets/security/security-debt-ci-job.yml`) — IaC scanning, DAST, and provenance signing are documented patterns you add the same way.
+
+### Expanded tool set
+
+Beyond the SAST/dependency-scanning already in each language's static stage:
+
+**Container & image scanning**
+- `Trivy` or `Grype` — scans the final built container image, not just source dependencies. Catches vulnerabilities introduced by the base image itself (`FROM` line), which source-level SCA never sees.
+- Run this in the **deploy-gate** stage against the actual artifact being shipped, not earlier against source — a clean dependency scan at build time doesn't guarantee a clean final image if the base image has known CVEs.
+
+**Infrastructure-as-Code scanning** (if Terraform/Helm/K8s manifests are in the repo)
+- `checkov` or `tfsec` — catches misconfigurations before they're applied: overly permissive IAM, public S3 buckets, missing encryption, containers running as root.
+- Runs in the static stage, same cost profile as linting — no reason to defer it to deploy time.
+
+**SBOM (Software Bill of Materials)**
+- `Syft` (generates) — produces a CycloneDX or SPDX manifest of every dependency in the built artifact.
+- Not a blocking gate on its own, but the artifact that makes every other security check *auditable* later — when a new CVE is disclosed next month, the SBOM is what tells you in seconds whether you're affected, instead of re-scanning every historical release.
+
+**Dynamic Application Security Testing (DAST)**
+- `OWASP ZAP` — runs against the actual deployed staging environment, not source code. Catches runtime-only issues static analysis structurally can't see: misconfigured headers, session handling flaws, actual exploitability of an endpoint rather than a theoretical pattern match.
+- Belongs in the deploy-gate stage, after smoke tests confirm the environment is actually up.
+
+**Supply chain / provenance**
+- `cosign` (sigstore) — signs build artifacts and container images; the deploy-gate verifies the signature before allowing a deploy to proceed. This is what stops a compromised CI runner or a tampered artifact from reaching production undetected — the deploy step trusts a cryptographic signature, not "this artifact came from the pipeline, probably."
+- Relevant especially once agents have write access to the repo: provenance verification means a deploy is gated on *what was actually built and signed*, not on trusting that nothing was altered between build and deploy.
+
+### Severity-based blocking, not blanket blocking
+
+A pipeline that fails the build on every low-severity finding trains people to ignore it — the alert fatigue itself becomes a security risk. The practical policy:
+
+- **Critical / High** → blocks merge, no exceptions without an explicit, logged suppression with a reason and an expiry date.
+- **Medium** → surfaces in the MR as a comment/report, doesn't block, tracked for scheduled remediation.
+- **Low / informational** → logged, visible in the security dashboard, not surfaced per-MR.
+
+Suppressions should live in a committed file (e.g. `.trivyignore`, `.semgrepignore` with an inline reason comment), not in someone's memory — an unreviewed suppression is a silent hole in the deterministic gate, same failure mode as an agent quietly weakening a test.
+
+### Agent-specific consideration
+
+The `CODEOWNERS` and permission-scoping guardrails from the next section apply directly here: an agent "fixing" a failing security scan by adding a suppression file, rather than fixing the underlying vulnerability, is the security-specific version of the same anti-pattern already covered for tests and pipeline config. Suppression files belong on the `CODEOWNERS`-protected list alongside test files and CI config.
 
 ---
 

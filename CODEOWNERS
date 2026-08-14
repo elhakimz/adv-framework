@@ -13,7 +13,12 @@
 /**/test_*.py                @your-team/leads
 /**/*_test.py                @your-team/leads
 /**/*Tests.cs                @your-team/leads
+/**/*.test.ts                @your-team/leads
+/**/*.property.test.ts       @your-team/leads
+/**/*.regression.test.ts     @your-team/leads
 /tests/                      @your-team/leads
+/tests/property_tests.rs      @your-team/leads
+/tests/regression_tests.rs     @your-team/leads
 
 # ---- Pipeline / CI definitions: an agent "fixing" a failing pipeline by
 # editing the pipeline itself, rather than the underlying bug, is the
@@ -24,6 +29,13 @@
 /pmd-ruleset.xml               @your-team/leads
 /pyproject.toml               @your-team/leads
 /Directory.Build.props        @your-team/leads
+/vitest.config.ts             @your-team/leads
+/vitest.property.config.ts    @your-team/leads
+/vitest.regression.config.ts  @your-team/leads
+/eslint.config.js             @your-team/leads
+/biome.json                   @your-team/leads
+/bunfig.toml                  @your-team/leads
+/deny.toml                     @your-team/leads
 
 # ---- Golden files / snapshots: an "update" to a verified snapshot is a
 # decision that current behavior is now the new correct baseline —
@@ -32,13 +44,23 @@
 /**/__snapshots__/            @your-team/leads
 /**/*.verified.txt            @your-team/leads
 
+# ---- Bun's isolation mechanism is directory structure, not naming/markers —
+# protect the directories themselves, not just files within them ----
+/tests/unit/                  @your-team/leads
+/tests/property/               @your-team/leads
+/tests/regression/              @your-team/leads
+
 # ---- Dependency manifests: agents adding a new dependency mid-task is a
 # common way security or license risk enters unreviewed ----
 /go.mod                       @your-team/leads
 /go.sum                       @your-team/leads
 /pom.xml                      @your-team/leads
 /package.json                 @your-team/leads
-/*.csproj                     @your-team/leads
+/package-lock.json             @your-team/leads
+/bun.lock                      @your-team/leads
+/Cargo.toml                     @your-team/leads
+/Cargo.lock                      @your-team/leads
+/**/*.csproj                  @your-team/leads
 
 # ---- Security suppression files: an agent "fixing" a failing scan by
 # suppressing the finding instead of fixing the vulnerability is the

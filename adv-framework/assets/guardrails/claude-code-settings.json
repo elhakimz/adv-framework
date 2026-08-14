@@ -49,7 +49,7 @@
       "Edit(go.mod)",
       "Edit(pom.xml)",
       "Edit(package.json)",
-      "Edit(*.csproj)",
+      "Edit(**/*.csproj)",
       "Edit(Cargo.toml)"
     ]
   },
