@@ -1,0 +1,82 @@
+# ============================================================================
+# ADV pipeline support — merge relevant sections into your existing
+# pyproject.toml. [project.optional-dependencies] "dev" group is what
+# `pip install -e ".[dev]"` in CI installs.
+# ============================================================================
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+    "bandit>=1.7.10",
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "hypothesis>=6.115.0",
+    "syrupy>=4.7.0",
+    "schemathesis>=3.35.0",
+    "alembic>=1.13.0",
+]
+
+# ---------------------------------------------------------------------------
+# ruff — lint + format, replaces flake8/isort/black in one tool
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes core
+    "I",             # isort (import ordering)
+    "UP",            # pyupgrade — flags outdated syntax
+    "B",             # bugbear — common bug patterns
+    "C4",            # comprehension simplifications
+    "SIM",           # code simplification suggestions
+]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+# ---------------------------------------------------------------------------
+# mypy — strict typing gate
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+# Loosen for test files if strict typing there isn't worth the friction yet:
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# bandit — Python-specific SAST
+# ---------------------------------------------------------------------------
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+
+# ---------------------------------------------------------------------------
+# pytest — markers are what let the CI pipeline run each test category
+# in isolation (`-m "not property and not regression"`, `-m "property"`, etc.)
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+markers = [
+    "property: Hypothesis-based property/invariant tests (slower, run in their own CI stage)",
+    "regression: golden-file/snapshot regression tests (run in their own CI stage)",
+]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

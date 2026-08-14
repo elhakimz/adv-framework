@@ -1,0 +1,18 @@
+# bunfig.toml — place at repo root
+
+[test]
+# Line + function coverage threshold. IMPORTANT GOTCHA (verify against
+# current Bun docs/changelog — this was an open/tracked issue as of
+# early 2026): this threshold has been reported to apply PER-FILE rather
+# than as an aggregate across the whole run. A project comfortably above
+# this number overall can still fail if a single low-coverage file trips
+# it individually. If `bun test --coverage` exits non-zero with all
+# tests passing, check per-file numbers in the report before assuming
+# the config is wrong.
+coverageThreshold = 0.8
+
+# If you only care about line coverage (not function coverage), Bun
+# applies an implicit function-coverage floor unless you set this
+# explicitly — worth setting if function-level coverage isn't part of
+# your gate:
+# coverageThreshold = { lines = 0.8, functions = 0 }

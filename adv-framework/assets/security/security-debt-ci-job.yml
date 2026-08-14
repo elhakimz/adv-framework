@@ -1,0 +1,55 @@
+# ============================================================================
+# Add these two jobs to the `deploy-gate` stage of any of the four
+# language-specific .gitlab-ci.yml pipelines. `container-scan` is the
+# actual security gate (blocks on Critical/High per the ADV Security
+# section); `file-security-debt-cards` runs after it and only creates
+# Plane cards — it never blocks the pipeline itself.
+# ============================================================================
+
+container-scan:
+  stage: deploy-gate
+  image: aquasec/trivy:latest
+  script:
+    # Scans the final built image, not source — catches CVEs introduced
+    # by the base image, which source-level SCA never sees
+    - trivy image --format json --output trivy-report.json $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+    # Severity-based blocking gate — exits non-zero only on Critical/High,
+    # per the ADV Security section's policy (Medium+ surfaces without blocking)
+    - trivy image --exit-code 1 --severity CRITICAL,HIGH $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+  artifacts:
+    when: always
+    paths:
+      - trivy-report.json
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+file-security-debt-cards:
+  stage: deploy-gate
+  image: python:3.12-slim
+  needs:
+    - job: container-scan
+      artifacts: true
+  script:
+    - pip install requests
+    - python scripts/create_security_debt_cards.py --report trivy-report.json
+  variables:
+    # Set these as masked/protected CI/CD variables in
+    # Settings > CI/CD > Variables — never commit them as plain text
+    PLANE_API_KEY: $PLANE_API_KEY
+    PLANE_WORKSPACE_SLUG: $PLANE_WORKSPACE_SLUG
+    PLANE_SECURITY_PROJECT_ID: $PLANE_SECURITY_PROJECT_ID
+    PLANE_SECURITY_STATE_ID: $PLANE_SECURITY_STATE_ID
+    PLANE_SECURITY_LABEL_ID: $PLANE_SECURITY_LABEL_ID
+  rules:
+    # Deliberately default-branch only — running this on every MR pipeline
+    # would flood the board with duplicate/noisy cards for in-progress work.
+    # The idempotency check in the script also protects against duplicates
+    # across repeated runs on the default branch itself.
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_failure
+      # runs even if container-scan failed the build — the whole point is
+      # that a blocked build still leaves a tracked card, not just a red
+      # pipeline someone has to notice manually

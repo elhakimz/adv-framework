@@ -1,0 +1,247 @@
+# ============================================================================
+# Automated Deterministic Verification pipeline — Go / GitLab CI
+# Each stage only runs if the previous stage passed. Every job is pass/fail.
+# ============================================================================
+
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+stages:
+  - static
+  - build
+  - unit
+  - property
+  - contract
+  - regression
+  - deploy-gate
+
+variables:
+  GOPATH: "$CI_PROJECT_DIR/.go"
+  GOMODCACHE: "$CI_PROJECT_DIR/.go/pkg/mod"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .go/pkg/mod
+
+# ---------------------------------------------------------------------------
+# STAGE 1: STATIC
+# ---------------------------------------------------------------------------
+
+golangci-lint:
+  stage: static
+  image: golangci/golangci-lint:v1.61-alpine
+  script:
+    # aggregates staticcheck, govet, errcheck, unused, gofmt-check, and
+    # ~40 other linters behind one config file (.golangci.yml)
+    - golangci-lint run --timeout=5m ./...
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+gofmt-check:
+  stage: static
+  image: golang:1.23-alpine
+  script:
+    # fails if any file isn't already formatted — not a rewrite step
+    - test -z "$(gofmt -l .)"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+gosec-security:
+  stage: static
+  image: golang:1.23-alpine
+  script:
+    - go install github.com/securego/gosec/v2/cmd/gosec@latest
+    # Go-specific SAST — catches things GitLab's generic SAST template
+    # misses: hardcoded credentials, weak crypto, unsafe file perms,
+    # SQL string concatenation, command injection via os/exec
+    - gosec -fmt=junit-xml -out=gosec-report.xml ./...
+  artifacts:
+    when: always
+    reports:
+      junit: gosec-report.xml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+govulncheck:
+  stage: static
+  image: golang:1.23-alpine
+  script:
+    - go install golang.org/x/vuln/cmd/govulncheck@latest
+    # official Go tool — checks whether known-vulnerable code paths are
+    # actually REACHABLE from your code, not just present in go.mod
+    # (fewer false positives than generic dependency scanners)
+    - govulncheck ./...
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+sast:
+  stage: static
+
+dependency_scanning:
+  stage: static
+
+secret_detection:
+  stage: static
+
+# ---------------------------------------------------------------------------
+# STAGE 2: BUILD
+# ---------------------------------------------------------------------------
+
+build:
+  stage: build
+  image: golang:1.23-alpine
+  script:
+    - go build ./...
+  artifacts:
+    paths:
+      - bin/
+    expire_in: 1 hour
+
+# ---------------------------------------------------------------------------
+# STAGE 3: UNIT — go test -race + coverage diff gate
+# ---------------------------------------------------------------------------
+
+unit-test:
+  stage: unit
+  image: golang:1.23-alpine
+  script:
+    # -race catches data races, cheap to run in CI and expensive to
+    # debug later. No build tag = only untagged (regular unit) tests run —
+    # property/regression tests live behind their own tags (see below)
+    - go test ./... -race -coverprofile=coverage.out -covermode=atomic
+    - go install github.com/AlekSi/gocov-xml@latest
+    - go install github.com/axw/gocov/gocov@latest
+    - gocov convert coverage.out | gocov-xml > coverage.xml
+  coverage: '/coverage:\s*(\d+\.?\d*)%/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.xml
+    expire_in: 1 week
+
+diff-coverage-gate:
+  stage: unit
+  image: python:3.12-slim
+  needs: ["unit-test"]
+  script:
+    - pip install diff-cover
+    - diff-cover coverage.xml --compare-branch=origin/$CI_DEFAULT_BRANCH --fail-under=80
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# STAGE 4: PROPERTY / INVARIANT — rapid
+# ---------------------------------------------------------------------------
+
+property-test:
+  stage: property
+  image: golang:1.23-alpine
+  script:
+    # -tags=property builds files marked //go:build property —
+    # excluded from the default unit-test run above
+    - go test -tags=property ./... -run TestProperty -v
+
+# ---------------------------------------------------------------------------
+# STAGE 5: CONTRACT / INTEGRATION
+# ---------------------------------------------------------------------------
+
+openapi-contract-test:
+  stage: contract
+  image: schemathesis/schemathesis
+  script:
+    # works with any OpenAPI spec — e.g. generated via swaggo/swag
+    # from Go struct annotations
+    - schemathesis run --checks all openapi.yml --base-url=$STAGING_API_URL
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+migration-check:
+  stage: contract
+  image: golang:1.23-alpine
+  services:
+    - postgres:16
+  variables:
+    POSTGRES_DB: migration_check
+    POSTGRES_USER: ci
+    POSTGRES_PASSWORD: ci
+    DATABASE_URL: "postgres://ci:ci@postgres:5432/migration_check?sslmode=disable"
+  script:
+    # example uses golang-migrate — swap for your migration tool
+    # (goose, atlas, etc.) if different
+    - go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+    - migrate -path ./migrations -database "$DATABASE_URL" up
+    - migrate -path ./migrations -database "$DATABASE_URL" down -all
+
+pact-contract-verify:
+  stage: contract
+  image: golang:1.23-alpine
+  script:
+    - go test -tags=pact ./... -run TestPact -v
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - "internal/handlers/**"
+        - "internal/api/**"
+
+# ---------------------------------------------------------------------------
+# STAGE 6: REGRESSION — goldie golden-file testing
+# ---------------------------------------------------------------------------
+
+golden-file-regression:
+  stage: regression
+  image: golang:1.23-alpine
+  script:
+    - go test -tags=regression ./... -run TestRegression -v
+  artifacts:
+    when: on_failure
+    paths:
+      # goldie writes a .golden diff-friendly copy on mismatch when run
+      # with -test.update-golden=false (default) — keep test output dirs
+      - "**/testdata/*.golden"
+    expire_in: 3 days
+
+# ---------------------------------------------------------------------------
+# STAGE 7: DEPLOY GATE
+# ---------------------------------------------------------------------------
+
+smoke-test:
+  stage: deploy-gate
+  image: mcr.microsoft.com/playwright:v1.48.0-jammy
+  script:
+    - npx playwright test tests/smoke --reporter=line
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy-production:
+  stage: deploy-gate
+  needs: ["smoke-test"]
+  script:
+    - echo "Deploying — replace with real deploy step (binary/container/k8s)"
+    - echo "Configure your CD platform's health-check + auto-rollback here"
+  environment:
+    name: production
+    on_stop: rollback-production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+
+rollback-production:
+  stage: deploy-gate
+  script:
+    - echo "Rollback triggered — wire this to your CD platform's rollback command"
+  environment:
+    name: production
+    action: stop
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual

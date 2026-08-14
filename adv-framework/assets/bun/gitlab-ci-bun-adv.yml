@@ -1,0 +1,235 @@
+# ============================================================================
+# Automated Deterministic Verification pipeline — Bun / GitLab CI
+# Each stage only runs if the previous stage passed. Every job is pass/fail.
+#
+# NOTE ON TEST ISOLATION: as of writing, Bun's test runner has no built-in
+# way to exclude test files from discovery by glob pattern (tracked as an
+# open feature request upstream). Rather than fight that limitation with a
+# workaround like runtime describe.skipIf() checks, this pipeline sidesteps
+# it entirely by using DIRECTORY-based separation — tests/unit/,
+# tests/property/, tests/regression/ — and passing the target directory as
+# an explicit positional argument to `bun test`. This is the one language
+# in this skill where the isolation mechanism is directory structure, not
+# a naming convention, marker, trait, or build tag. Verify this limitation
+# against Bun's current changelog before assuming it's still accurate —
+# Bun ships new releases frequently and this may have been added since.
+# ============================================================================
+
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+stages:
+  - static
+  - build
+  - unit
+  - property
+  - contract
+  - regression
+  - deploy-gate
+
+.setup-bun: &setup-bun
+  image: oven/bun:1-slim
+  before_script:
+    # bun.lock is Bun's text-based lockfile (the newer default, replacing
+    # the old binary bun.lockb) — readable in diffs and compatible with
+    # dependency-scanning tooling in a way the binary format wasn't
+    - bun install --frozen-lockfile
+
+# ---------------------------------------------------------------------------
+# STAGE 1: STATIC
+# ---------------------------------------------------------------------------
+
+biome-check:
+  stage: static
+  <<: *setup-bun
+  script:
+    # Biome combines linting + format-checking in one fast Rust binary —
+    # commonly paired with Bun for the same speed-first philosophy.
+    # Swap for ESLint + Prettier if your project needs ESLint's larger
+    # plugin ecosystem instead.
+    - bunx biome ci .
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+typecheck:
+  stage: static
+  <<: *setup-bun
+  script:
+    # Bun transpiles/strips TypeScript at runtime but does not
+    # type-check — tsc is still required for actual type-checking
+    - bunx tsc --noEmit
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+sast:
+  stage: static
+
+dependency_scanning:
+  stage: static
+
+secret_detection:
+  stage: static
+
+# ---------------------------------------------------------------------------
+# STAGE 2: BUILD
+# ---------------------------------------------------------------------------
+
+build:
+  stage: build
+  <<: *setup-bun
+  script:
+    # bun build is Bun's native bundler — replaces webpack/esbuild
+    - bun build ./src/index.ts --outdir ./dist --target=bun
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 hour
+
+# ---------------------------------------------------------------------------
+# STAGE 3: UNIT — bun test + coverage diff gate
+# ---------------------------------------------------------------------------
+
+unit-test:
+  stage: unit
+  <<: *setup-bun
+  script:
+    # Explicit directory scoping IS the isolation mechanism here —
+    # only tests/unit/ is discovered, tests/property/ and
+    # tests/regression/ are never touched by this job
+    - bun test tests/unit --coverage --coverage-reporter=lcov --coverage-dir=coverage
+    # Convert lcov to Cobertura so diff-cover (used consistently across
+    # every language in this skill) can read it
+    - pip install lcov_cobertura --break-system-packages 2>/dev/null || (apt-get update && apt-get install -y python3-pip && pip install lcov_cobertura --break-system-packages)
+    - python3 -c "from lcov_cobertura import LcovCobertura; LcovCobertura(open('coverage/lcov.info').read()).convert().writexml or open('coverage/cobertura.xml','w').write(LcovCobertura(open('coverage/lcov.info').read()).convert())"
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura.xml
+    paths:
+      - coverage/
+    expire_in: 1 week
+  # KNOWN GOTCHA (as of early 2026, verify against current Bun release
+  # notes): bun test's bunfig.toml `coverageThreshold` applies PER-FILE,
+  # not as an aggregate — a project can be well above its overall target
+  # and still exit non-zero because one low-coverage file trips the
+  # per-file check. If this job fails unexpectedly with all tests
+  # passing, check per-file coverage before assuming the gate is broken.
+
+diff-coverage-gate:
+  stage: unit
+  image: python:3.12-slim
+  needs: ["unit-test"]
+  script:
+    - pip install diff-cover
+    - diff-cover coverage/cobertura.xml --compare-branch=origin/$CI_DEFAULT_BRANCH --fail-under=80
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# STAGE 4: PROPERTY / INVARIANT — fast-check
+# ---------------------------------------------------------------------------
+
+property-test:
+  stage: property
+  <<: *setup-bun
+  script:
+    # fast-check works with any test runner's expect/assert — Bun's
+    # Jest-compatible API means it drops in with no adapter needed
+    - bun test tests/property
+
+# ---------------------------------------------------------------------------
+# STAGE 5: CONTRACT / INTEGRATION
+# ---------------------------------------------------------------------------
+
+openapi-contract-test:
+  stage: contract
+  image: schemathesis/schemathesis
+  script:
+    - schemathesis run --checks all openapi.yml --base-url=$STAGING_API_URL
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+migration-check:
+  stage: contract
+  <<: *setup-bun
+  services:
+    - postgres:16
+  variables:
+    POSTGRES_DB: migration_check
+    POSTGRES_USER: ci
+    POSTGRES_PASSWORD: ci
+    DATABASE_URL: "postgresql://ci:ci@postgres:5432/migration_check"
+  script:
+    # Drizzle Kit is the common migration tool in Bun-first projects —
+    # swap for Prisma if that's what the project actually uses
+    - bunx drizzle-kit migrate
+
+pact-contract-verify:
+  stage: contract
+  <<: *setup-bun
+  script:
+    - bun test tests/pact
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - "src/routes/**"
+
+# ---------------------------------------------------------------------------
+# STAGE 6: REGRESSION — Bun's built-in snapshot testing
+# ---------------------------------------------------------------------------
+
+golden-file-regression:
+  stage: regression
+  <<: *setup-bun
+  script:
+    # toMatchSnapshot() is built into bun:test, Jest-compatible, no
+    # extra library needed. Never run with --update in CI — updating a
+    # snapshot is a human decision made locally after confirming intent,
+    # same rule as every other language's regression gate in this skill
+    - bun test tests/regression
+  artifacts:
+    when: on_failure
+    paths:
+      - "**/__snapshots__/"
+    expire_in: 3 days
+
+# ---------------------------------------------------------------------------
+# STAGE 7: DEPLOY GATE
+# ---------------------------------------------------------------------------
+
+smoke-test:
+  stage: deploy-gate
+  image: mcr.microsoft.com/playwright:v1.48.0-jammy
+  script:
+    - npx playwright test tests/smoke --reporter=line
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy-production:
+  stage: deploy-gate
+  needs: ["smoke-test"]
+  script:
+    - echo "Deploying — replace with real deploy step"
+    - echo "Configure your CD platform's health-check + auto-rollback here"
+  environment:
+    name: production
+    on_stop: rollback-production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+
+rollback-production:
+  stage: deploy-gate
+  script:
+    - echo "Rollback triggered — wire this to your CD platform's rollback command"
+  environment:
+    name: production
+    action: stop
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual

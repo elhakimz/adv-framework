@@ -1,0 +1,36 @@
+# deny.toml — place at repo root, read by `cargo deny check` in CI
+
+[licenses]
+# Start restrictive and widen deliberately — an agent adding a dependency
+# with an unreviewed license is exactly the kind of thing this gate exists
+# to catch automatically rather than relying on someone noticing in review
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Flags multiple versions of the same crate in the dependency tree —
+# not just bloat, but a real source of subtle bugs when two versions of
+# a type don't unify across a workspace
+multiple-versions = "warn"
+wildcards = "deny"
+
+[advisories]
+# RustSec advisory database — same source cargo-audit checks, cargo-deny
+# folds it into one combined report alongside licenses/bans/sources
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+
+[sources]
+# Only allow crates from the official registry by default — an
+# unreviewed git/path dependency is a supply-chain risk worth gating on
+unknown-registry = "deny"
+unknown-git = "warn"

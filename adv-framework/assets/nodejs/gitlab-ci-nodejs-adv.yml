@@ -1,0 +1,242 @@
+# ============================================================================
+# Automated Deterministic Verification pipeline — Node.js / TypeScript / GitLab CI
+# Each stage only runs if the previous stage passed. Every job is pass/fail.
+# ============================================================================
+
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+stages:
+  - static
+  - build
+  - unit
+  - property
+  - contract
+  - regression
+  - deploy-gate
+
+variables:
+  npm_config_cache: "$CI_PROJECT_DIR/.npm"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .npm/
+
+.setup-node: &setup-node
+  image: node:22-slim
+  before_script:
+    - npm ci --prefer-offline
+
+# ---------------------------------------------------------------------------
+# STAGE 1: STATIC
+# ---------------------------------------------------------------------------
+
+eslint:
+  stage: static
+  <<: *setup-node
+  script:
+    - npx eslint . --max-warnings=0
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+prettier-check:
+  stage: static
+  <<: *setup-node
+  script:
+    # fails (non-zero exit) if any file isn't already formatted —
+    # not a rewrite step
+    - npx prettier --check .
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+typecheck:
+  stage: static
+  <<: *setup-node
+  script:
+    - npx tsc --noEmit
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+npm-audit:
+  stage: static
+  <<: *setup-node
+  script:
+    # Severity-based blocking per the ADV Security section —
+    # only Critical/High fail the build
+    - npm audit --audit-level=high
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+sast:
+  stage: static
+
+dependency_scanning:
+  stage: static
+
+secret_detection:
+  stage: static
+
+# ---------------------------------------------------------------------------
+# STAGE 2: BUILD
+# ---------------------------------------------------------------------------
+
+build:
+  stage: build
+  <<: *setup-node
+  script:
+    - npm run build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 hour
+
+# ---------------------------------------------------------------------------
+# STAGE 3: UNIT — Vitest + coverage diff gate
+# ---------------------------------------------------------------------------
+
+unit-test:
+  stage: unit
+  <<: *setup-node
+  script:
+    # vitest.config.ts excludes *.property.test.ts and *.regression.test.ts
+    # by default — see vitest.config.ts for the exclude patterns
+    - npx vitest run --coverage --reporter=junit --outputFile=unit-report.xml
+  coverage: '/All files[^|]*\|[^|]*\s+([\d.]+)/'
+  artifacts:
+    reports:
+      junit: unit-report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura-coverage.xml
+    paths:
+      - coverage/
+    expire_in: 1 week
+
+diff-coverage-gate:
+  stage: unit
+  image: python:3.12-slim
+  needs: ["unit-test"]
+  script:
+    - pip install diff-cover
+    - diff-cover coverage/cobertura-coverage.xml --compare-branch=origin/$CI_DEFAULT_BRANCH --fail-under=80
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# STAGE 4: PROPERTY / INVARIANT — fast-check
+# ---------------------------------------------------------------------------
+
+property-test:
+  stage: property
+  <<: *setup-node
+  script:
+    # Separate vitest config file whose `include` pattern ONLY matches
+    # *.property.test.ts — keeps these out of the default unit run above
+    - npx vitest run -c vitest.property.config.ts --reporter=junit --outputFile=property-report.xml
+  artifacts:
+    reports:
+      junit: property-report.xml
+
+# ---------------------------------------------------------------------------
+# STAGE 5: CONTRACT / INTEGRATION
+# ---------------------------------------------------------------------------
+
+openapi-contract-test:
+  stage: contract
+  image: schemathesis/schemathesis
+  script:
+    - schemathesis run --checks all openapi.yml --base-url=$STAGING_API_URL
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+migration-check:
+  stage: contract
+  <<: *setup-node
+  services:
+    - postgres:16
+  variables:
+    POSTGRES_DB: migration_check
+    POSTGRES_USER: ci
+    POSTGRES_PASSWORD: ci
+    DATABASE_URL: "postgresql://ci:ci@postgres:5432/migration_check"
+  script:
+    # Example uses Prisma — swap for Drizzle Kit / Knex / TypeORM if
+    # different. NOTE: Prisma's migrate workflow doesn't have a clean
+    # single-command "down all" the way Flyway/Alembic/EF do — verify
+    # your rollback story separately rather than assuming this job
+    # covers it the way the other four languages' migration-check does.
+    - npx prisma migrate deploy
+
+pact-contract-verify:
+  stage: contract
+  <<: *setup-node
+  script:
+    - npx vitest run tests/pact --reporter=junit --outputFile=pact-report.xml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - "src/routes/**"
+        - "src/handlers/**"
+
+# ---------------------------------------------------------------------------
+# STAGE 6: REGRESSION — Vitest built-in snapshot testing
+# ---------------------------------------------------------------------------
+
+golden-file-regression:
+  stage: regression
+  <<: *setup-node
+  script:
+    # Separate config, include pattern matches only *.regression.test.ts.
+    # Snapshot mismatches fail the run — never pass --update in CI, that
+    # flag is a human decision made locally after confirming intent
+    - npx vitest run -c vitest.regression.config.ts --reporter=junit --outputFile=regression-report.xml
+  artifacts:
+    reports:
+      junit: regression-report.xml
+    when: on_failure
+    paths:
+      - "**/__snapshots__/"
+    expire_in: 3 days
+
+# ---------------------------------------------------------------------------
+# STAGE 7: DEPLOY GATE
+# ---------------------------------------------------------------------------
+
+smoke-test:
+  stage: deploy-gate
+  image: mcr.microsoft.com/playwright:v1.48.0-jammy
+  script:
+    - npx playwright test tests/smoke --reporter=line
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy-production:
+  stage: deploy-gate
+  needs: ["smoke-test"]
+  script:
+    - echo "Deploying — replace with real deploy step"
+    - echo "Configure your CD platform's health-check + auto-rollback here"
+  environment:
+    name: production
+    on_stop: rollback-production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+
+rollback-production:
+  stage: deploy-gate
+  script:
+    - echo "Rollback triggered — wire this to your CD platform's rollback command"
+  environment:
+    name: production
+    action: stop
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual

@@ -1,0 +1,40 @@
+{
+  "//": "Claude Code project settings.json — place in .claude/settings.json at repo root. Comparable permission scoping should be configured wherever Antigravity or another agent tool exposes it (check the tool's own permission/allowlist settings — the principle transfers even if the config format doesn't).",
+
+  "permissions": {
+    "//": "Deny list wins over allow list. The goal: the agent can freely edit implementation code, but touching the files that DEFINE correctness always requires explicit human action outside the agent session.",
+
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git commit --no-verify*)",
+      "Edit(.gitlab-ci.yml)",
+      "Edit(.golangci.yml)",
+      "Edit(checkstyle.xml)",
+      "Edit(pmd-ruleset.xml)",
+      "Edit(Directory.Build.props)",
+      "Edit(**/testdata/*.golden)",
+      "Edit(**/__snapshots__/**)",
+      "Edit(**/*.verified.txt)",
+      "Edit(CODEOWNERS)",
+      "Edit(.claude/settings.json)"
+    ],
+
+    "ask": [
+      "Edit(**/*_test.go)",
+      "Edit(**/*Test.java)",
+      "Edit(**/test_*.py)",
+      "Edit(**/*Tests.cs)",
+      "Bash(go test -update*)",
+      "Bash(pytest*--snapshot-update*)",
+      "Bash(dotnet test*)",
+      "Edit(go.mod)",
+      "Edit(pom.xml)",
+      "Edit(package.json)",
+      "Edit(*.csproj)"
+    ]
+  },
+
+  "//comment_on_ask": "Files under 'ask' aren't blocked outright — an agent legitimately needs to write new tests. 'ask' forces an explicit approval prompt each time rather than a silent edit, so a test-weakening change can't slip through inside a larger multi-file commit without you seeing it happen.",
+
+  "//comment_on_deny": "Files under 'deny' are things an agent should never touch as part of 'fixing' a failing check — if the pipeline itself, its config, or an already-accepted golden file needs to change, that's a deliberate human action taken outside the agent's autonomous loop, not something the agent decides to do to make a red pipeline turn green."
+}

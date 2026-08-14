@@ -1,0 +1,260 @@
+# ============================================================================
+# Automated Deterministic Verification pipeline — Python / GitLab CI
+# Each stage only runs if the previous stage passed. Every job is pass/fail.
+# ============================================================================
+
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+stages:
+  - static
+  - build
+  - unit
+  - property
+  - contract
+  - regression
+  - deploy-gate
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .cache/pip
+    - .venv
+
+.setup-venv: &setup-venv
+  before_script:
+    - python -m venv .venv
+    - source .venv/bin/activate
+    - pip install --upgrade pip
+    - pip install -e ".[dev]"
+
+# ---------------------------------------------------------------------------
+# STAGE 1: STATIC
+# ---------------------------------------------------------------------------
+
+ruff-lint:
+  stage: static
+  image: python:3.12-slim
+  <<: *setup-venv
+  script:
+    - ruff check . --output-format=gitlab > ruff-report.json
+  artifacts:
+    reports:
+      codequality: ruff-report.json
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+ruff-format-check:
+  stage: static
+  image: python:3.12-slim
+  <<: *setup-venv
+  script:
+    # fails (non-zero exit) if any file isn't already formatted —
+    # this is a check, not a reformat
+    - ruff format --check .
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+mypy-typecheck:
+  stage: static
+  image: python:3.12-slim
+  <<: *setup-venv
+  script:
+    - mypy src/ --strict
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+bandit-security:
+  stage: static
+  image: python:3.12-slim
+  <<: *setup-venv
+  script:
+    # Python-specific SAST, catches things GitLab's generic SAST
+    # template misses — hardcoded secrets patterns, unsafe eval/pickle,
+    # weak crypto, shell=True subprocess calls, etc.
+    - bandit -r src/ -f json -o bandit-report.json
+  artifacts:
+    when: always
+    paths:
+      - bandit-report.json
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+sast:
+  stage: static
+
+dependency_scanning:
+  stage: static
+
+secret_detection:
+  stage: static
+
+# ---------------------------------------------------------------------------
+# STAGE 2: BUILD — package builds cleanly
+# ---------------------------------------------------------------------------
+
+build:
+  stage: build
+  image: python:3.12-slim
+  script:
+    - pip install build
+    - python -m build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 hour
+
+# ---------------------------------------------------------------------------
+# STAGE 3: UNIT — pytest + coverage diff gate
+# ---------------------------------------------------------------------------
+
+unit-test:
+  stage: unit
+  image: python:3.12-slim
+  <<: *setup-venv
+  script:
+    # -m "not property and not regression" relies on pytest markers
+    # (see pyproject.toml) to keep this run fast and isolated
+    - pytest tests/ -m "not property and not regression" --cov=src --cov-report=xml --cov-report=term --junitxml=report.xml
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.xml
+    expire_in: 1 week
+
+diff-coverage-gate:
+  stage: unit
+  image: python:3.12-slim
+  needs: ["unit-test"]
+  script:
+    - pip install diff-cover
+    - diff-cover coverage.xml --compare-branch=origin/$CI_DEFAULT_BRANCH --fail-under=80
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# STAGE 4: PROPERTY / INVARIANT — Hypothesis
+# ---------------------------------------------------------------------------
+
+property-test:
+  stage: property
+  image: python:3.12-slim
+  <<: *setup-venv
+  script:
+    - pytest tests/ -m "property" --junitxml=property-report.xml
+  artifacts:
+    reports:
+      junit: property-report.xml
+    when: on_failure
+    paths:
+      # Hypothesis writes minimal failing examples here — keep them
+      # so a failure is reproducible without re-running the fuzz search
+      - .hypothesis/
+
+# ---------------------------------------------------------------------------
+# STAGE 5: CONTRACT / INTEGRATION
+# ---------------------------------------------------------------------------
+
+openapi-contract-test:
+  stage: contract
+  image: schemathesis/schemathesis
+  script:
+    - schemathesis run --checks all openapi.yml --base-url=$STAGING_API_URL
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+alembic-migration-check:
+  stage: contract
+  image: python:3.12-slim
+  services:
+    - postgres:16
+  variables:
+    POSTGRES_DB: migration_check
+    POSTGRES_USER: ci
+    POSTGRES_PASSWORD: ci
+    DATABASE_URL: "postgresql://ci:ci@postgres:5432/migration_check"
+  <<: *setup-venv
+  script:
+    # applies every migration against a throwaway DB,
+    # then checks downgrade() paths aren't broken either
+    - alembic upgrade head
+    - alembic downgrade base
+
+pact-contract-verify:
+  stage: contract
+  image: python:3.12-slim
+  <<: *setup-venv
+  script:
+    - pytest tests/pact/ --junitxml=pact-report.xml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - "src/api/**"
+
+# ---------------------------------------------------------------------------
+# STAGE 6: REGRESSION — syrupy snapshot testing
+# ---------------------------------------------------------------------------
+
+golden-file-regression:
+  stage: regression
+  image: python:3.12-slim
+  <<: *setup-venv
+  script:
+    - pytest tests/ -m "regression" --snapshot-details --junitxml=regression-report.xml
+  artifacts:
+    reports:
+      junit: regression-report.xml
+    when: on_failure
+    paths:
+      - tests/__snapshots__/
+    expire_in: 3 days
+
+# ---------------------------------------------------------------------------
+# STAGE 7: DEPLOY GATE
+# ---------------------------------------------------------------------------
+
+smoke-test:
+  stage: deploy-gate
+  image: mcr.microsoft.com/playwright:v1.48.0-jammy
+  script:
+    - npx playwright test tests/smoke --reporter=line
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy-production:
+  stage: deploy-gate
+  needs: ["smoke-test"]
+  script:
+    - echo "Deploying — replace with real deploy step"
+    - echo "Configure your CD platform's health-check + auto-rollback here"
+  environment:
+    name: production
+    on_stop: rollback-production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+
+rollback-production:
+  stage: deploy-gate
+  script:
+    - echo "Rollback triggered — wire this to your CD platform's rollback command"
+  environment:
+    name: production
+    action: stop
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual

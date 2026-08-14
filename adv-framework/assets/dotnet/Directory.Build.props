@@ -1,0 +1,26 @@
+<!--
+  Directory.Build.props — drop at the repo root (sibling of the .sln file).
+  MSBuild automatically applies this to every project in the tree, so
+  analyzer/style enforcement doesn't need repeating per .csproj.
+-->
+<Project>
+  <PropertyGroup>
+    <!-- Turns on the full built-in .NET analyzer ruleset, not just the
+         minimal default set -->
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <AnalysisLevel>latest</AnalysisLevel>
+
+    <!-- Code-style rules (IDE0xxx) get enforced at build time too,
+         not just flagged in the editor -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- Nullable reference types as an actual compiler check, not decoration -->
+    <Nullable>enable</Nullable>
+
+    <!-- Uncomment once the codebase is clean enough to make every
+         analyzer warning build-breaking (recommended end state, but
+         turn on incrementally rather than all at once on a large existing
+         codebase — it will surface a lot at first) -->
+    <!-- <TreatWarningsAsErrors>true</TreatWarningsAsErrors> -->
+  </PropertyGroup>
+</Project>

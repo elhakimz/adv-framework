@@ -1,0 +1,51 @@
+flowchart TD
+    Start([Agent or human commits a change]) --> S1
+
+    subgraph PIPELINE["Automated Deterministic Verification Pipeline"]
+        direction TB
+        S1["1 · STATIC<br/>lint · type-check · SAST · secrets"]
+        S2["2 · BUILD<br/>compiles / bundles"]
+        S3["3 · UNIT<br/>fixed tests + diff-coverage gate"]
+        S4["4 · PROPERTY / INVARIANT<br/>rule holds for all inputs"]
+        S5["5 · CONTRACT / INTEGRATION<br/>schemas · migrations · service contracts"]
+        S6["6 · REGRESSION<br/>golden-file / snapshot diff"]
+        S7["7 · DEPLOY GATE<br/>smoke test · image scan · DAST · signature verify"]
+
+        S1 -->|pass| S2
+        S2 -->|pass| S3
+        S3 -->|pass| S4
+        S4 -->|pass| S5
+        S5 -->|pass| S6
+        S6 -->|pass| S7
+    end
+
+    S1 -->|fail| Blocked["❌ BLOCKED<br/>fix and resubmit — no partial pass"]
+    S2 -->|fail| Blocked
+    S3 -->|fail| Blocked
+    S4 -->|fail| Blocked
+    S5 -->|fail| Blocked
+    S6 -->|fail| Blocked
+    S7 -->|fail| Rollback["⏪ AUTO-ROLLBACK"]
+
+    S7 -->|pass| Gate{"Touches tests /<br/>CI config / suppression files?"}
+    Gate -->|yes| Human["👤 CODEOWNERS<br/>human approval required"]
+    Gate -->|no| Merged
+    Human -->|approved| Merged(["✅ Merged & Deployed"])
+
+    Merged -.escaped bug found later.-> Ratchet["Write the deterministic<br/>gate that would've caught it"]
+    Ratchet -.suite only grows, never shrinks.-> S1
+
+    AntiPattern["🚫 LLM reviews LLM's own output<br/>self-report of correctness<br/>agent-generated screenshots as 'proof'"]
+    AntiPattern -.NOT a substitute for.-x PIPELINE
+
+    classDef stage fill:#1c2f4a,color:#fff,stroke:#0e1826,stroke-width:1px
+    classDef blocked fill:#b5493f,color:#fff,stroke:#7a2f28,stroke-width:1px
+    classDef good fill:#2c6e63,color:#fff,stroke:#1c463d,stroke-width:1px
+    classDef gate fill:#c99a3c,color:#1a1200,stroke:#8a6410,stroke-width:1px
+    classDef anti fill:#3a1a1a,color:#f3cfc9,stroke:#b5493f,stroke-width:2px,stroke-dasharray: 4 3
+
+    class S1,S2,S3,S4,S5,S6,S7 stage
+    class Blocked,Rollback blocked
+    class Merged good
+    class Gate,Human,Ratchet gate
+    class AntiPattern anti

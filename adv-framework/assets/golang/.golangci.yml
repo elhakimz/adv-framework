@@ -1,0 +1,36 @@
+# .golangci.yml — place at repo root
+# golangci-lint auto-discovers this file, no CI flag needed to point at it
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck # unchecked errors — the most common real Go bug source
+    - govet # suspicious constructs (printf format mismatches, etc.)
+    - staticcheck # deep static analysis, subsumes many older linters
+    - unused # dead code
+    - gofmt # formatting
+    - goimports # import grouping/formatting
+    - bodyclose # unclosed HTTP response bodies — common resource leak
+    - sqlclosecheck # unclosed *sql.Rows/*sql.Stmt
+    - noctx # HTTP requests without context (no cancellation/timeout)
+    - gosec # security-focused static analysis (in addition to the
+             # dedicated gosec CI job — this catches issues inline in
+             # editor/pre-commit too)
+    - revive # configurable style/convention linter, replaces golint
+
+linters-settings:
+  govet:
+    enable-all: true
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+issues:
+  # Don't hide issues after the first one per line/linter —
+  # a partial fix that still leaves problems shouldn't look clean
+  max-issues-per-linter: 0
+  max-same-issues: 0

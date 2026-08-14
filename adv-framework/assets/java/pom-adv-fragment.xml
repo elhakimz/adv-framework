@@ -1,0 +1,163 @@
+<!--
+  ADV pipeline support — plugin declarations + profiles
+  Merge this into your existing pom.xml:
+    - <properties> keys go into your existing <properties> block
+    - <dependencies> go into your existing <dependencies> block
+    - <build><plugins> go into your existing <build><plugins> block
+    - <profiles> can be added as a top-level sibling of <build>
+-->
+
+<properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <junit.jupiter.version>5.11.0</junit.jupiter.version>
+    <jqwik.version>1.9.1</jqwik.version>
+    <jacoco.version>0.8.12</jacoco.version>
+    <checkstyle.version>3.5.0</checkstyle.version>
+    <checkstyle.rules.version>10.18.1</checkstyle.rules.version>
+    <pmd.version>3.25.0</pmd.version>
+</properties>
+
+<dependencies>
+    <!-- Regular unit testing -->
+    <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <version>${junit.jupiter.version}</version>
+        <scope>test</scope>
+    </dependency>
+
+    <!-- Property/invariant testing — generates adversarial inputs -->
+    <dependency>
+        <groupId>net.jqwik</groupId>
+        <artifactId>jqwik</artifactId>
+        <version>${jqwik.version}</version>
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+
+<build>
+    <plugins>
+        <!-- ================= STATIC LAYER ================= -->
+
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-checkstyle-plugin</artifactId>
+            <version>${checkstyle.version}</version>
+            <dependencies>
+                <dependency>
+                    <groupId>com.puppycrawl.tools</groupId>
+                    <artifactId>checkstyle</artifactId>
+                    <version>${checkstyle.rules.version}</version>
+                </dependency>
+            </dependencies>
+            <configuration>
+                <!-- Start from Google's ruleset and tune from there rather than
+                     writing one from scratch — swap for a custom XML once you
+                     know which rules you actually want to enforce vs relax -->
+                <configLocation>google_checks.xml</configLocation>
+                <consoleOutput>true</consoleOutput>
+                <failsOnError>true</failsOnError>
+                <violationSeverity>warning</violationSeverity>
+            </configuration>
+        </plugin>
+
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-pmd-plugin</artifactId>
+            <version>${pmd.version}</version>
+            <configuration>
+                <rulesets>
+                    <ruleset>category/java/bestpractices.xml</ruleset>
+                    <ruleset>category/java/errorprone.xml</ruleset>
+                    <ruleset>category/java/design.xml</ruleset>
+                </rulesets>
+                <printFailingErrors>true</printFailingErrors>
+            </configuration>
+        </plugin>
+
+        <!-- ================= UNIT + COVERAGE LAYER ================= -->
+
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+                <!-- Only picks up plain JUnit5 unit tests by default.
+                     Property and regression tests are excluded here and run
+                     only inside their own profiles below, so a normal
+                     `mvn test` stays fast. -->
+                <excludes>
+                    <exclude>**/*PropertyTest.java</exclude>
+                    <exclude>**/*RegressionTest.java</exclude>
+                </excludes>
+            </configuration>
+        </plugin>
+
+        <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <version>${jacoco.version}</version>
+            <executions>
+                <execution>
+                    <id>prepare-agent</id>
+                    <goals>
+                        <goal>prepare-agent</goal>
+                    </goals>
+                </execution>
+                <execution>
+                    <id>report</id>
+                    <phase>test</phase>
+                    <goals>
+                        <goal>report</goal>
+                    </goals>
+                    <configuration>
+                        <!-- XML report is what diff-cover reads in CI -->
+                        <outputDirectory>target/site/jacoco</outputDirectory>
+                    </configuration>
+                </execution>
+            </executions>
+        </plugin>
+    </plugins>
+</build>
+
+<profiles>
+    <!-- ================= PROPERTY / INVARIANT PROFILE ================= -->
+    <profile>
+        <id>property-tests</id>
+        <build>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <includes>
+                            <include>**/*PropertyTest.java</include>
+                        </includes>
+                        <excludes>
+                            <!-- override the default exclude for this profile only -->
+                        </excludes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </build>
+    </profile>
+
+    <!-- ================= REGRESSION / GOLDEN-FILE PROFILE ================= -->
+    <profile>
+        <id>regression-tests</id>
+        <build>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <includes>
+                            <include>**/*RegressionTest.java</include>
+                        </includes>
+                        <excludes>
+                        </excludes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </build>
+    </profile>
+</profiles>

@@ -1,0 +1,262 @@
+# ============================================================================
+# Automated Deterministic Verification pipeline — Rust / GitLab CI
+# Each stage only runs if the previous stage passed. Every job is pass/fail.
+#
+# NOTE ON TEST ISOLATION: Rust needs no extra config file or naming
+# convention for this — Cargo's own project structure already separates
+# unit tests (inline #[cfg(test)] modules, part of the lib target) from
+# integration tests (each file under tests/ compiles as its own binary
+# target). `cargo nextest run --lib` runs ONLY inline unit tests;
+# `cargo nextest run --test property_tests` runs ONLY that one file.
+# No markers, tags, or separate config files needed — the isolation is
+# structural, native to how Cargo already organizes a project.
+# ============================================================================
+
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+stages:
+  - static
+  - build
+  - unit
+  - property
+  - contract
+  - regression
+  - deploy-gate
+
+variables:
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .cargo/
+    - target/
+
+.setup-rust: &setup-rust
+  image: rust:1.83-slim
+  before_script:
+    - apt-get update -qq && apt-get install -qq -y pkg-config libssl-dev
+
+# ---------------------------------------------------------------------------
+# STAGE 1: STATIC
+# ---------------------------------------------------------------------------
+
+fmt-check:
+  stage: static
+  <<: *setup-rust
+  script:
+    # fails (non-zero exit) if any file isn't already formatted —
+    # not a rewrite step
+    - cargo fmt --check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+clippy:
+  stage: static
+  <<: *setup-rust
+  script:
+    # -D warnings turns every clippy lint into a hard failure —
+    # without it clippy only prints suggestions, doesn't gate anything
+    - cargo clippy --all-targets --all-features -- -D warnings
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+cargo-audit:
+  stage: static
+  <<: *setup-rust
+  script:
+    - cargo install cargo-audit --locked
+    # Checks Cargo.lock against the RustSec advisory database —
+    # Rust-specific SCA, catches known-vulnerable crate versions
+    - cargo audit
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+cargo-deny:
+  stage: static
+  <<: *setup-rust
+  script:
+    - cargo install cargo-deny --locked
+    # Broader supply-chain check than cargo-audit alone: license
+    # compliance, duplicate-dependency bloat, and untrusted registry
+    # sources, driven by deny.toml
+    - cargo deny check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+sast:
+  stage: static
+
+dependency_scanning:
+  stage: static
+
+secret_detection:
+  stage: static
+
+# ---------------------------------------------------------------------------
+# STAGE 2: BUILD
+# ---------------------------------------------------------------------------
+
+build:
+  stage: build
+  <<: *setup-rust
+  script:
+    - cargo build --release --locked
+  artifacts:
+    paths:
+      - target/release/
+    expire_in: 1 hour
+
+# ---------------------------------------------------------------------------
+# STAGE 3: UNIT — cargo-nextest --lib + cargo-llvm-cov, diff-coverage gate
+# ---------------------------------------------------------------------------
+
+unit-test:
+  stage: unit
+  <<: *setup-rust
+  script:
+    - cargo install cargo-nextest cargo-llvm-cov --locked
+    - rustup component add llvm-tools-preview
+    # --lib scopes this to ONLY the inline #[cfg(test)] unit tests —
+    # tests/property_tests.rs and tests/regression_tests.rs are
+    # separate Cargo targets, never touched by this job
+    - cargo llvm-cov --lib nextest --cobertura --output-path coverage.xml
+  coverage: '/^TOTAL.*\s+(\d+\.\d+)%/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.xml
+    expire_in: 1 week
+
+diff-coverage-gate:
+  stage: unit
+  image: python:3.12-slim
+  needs: ["unit-test"]
+  script:
+    - pip install diff-cover
+    - diff-cover coverage.xml --compare-branch=origin/$CI_DEFAULT_BRANCH --fail-under=80
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# STAGE 4: PROPERTY / INVARIANT — proptest
+# ---------------------------------------------------------------------------
+
+property-test:
+  stage: property
+  <<: *setup-rust
+  script:
+    - cargo install cargo-nextest --locked
+    # Runs ONLY tests/property_tests.rs — the Cargo integration-test
+    # target selection IS the isolation, no tags/markers needed
+    - cargo nextest run --test property_tests
+
+# ---------------------------------------------------------------------------
+# STAGE 5: CONTRACT / INTEGRATION
+# ---------------------------------------------------------------------------
+
+openapi-contract-test:
+  stage: contract
+  image: schemathesis/schemathesis
+  script:
+    - schemathesis run --checks all openapi.yml --base-url=$STAGING_API_URL
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+sqlx-migration-check:
+  stage: contract
+  <<: *setup-rust
+  services:
+    - postgres:16
+  variables:
+    POSTGRES_DB: migration_check
+    POSTGRES_USER: ci
+    POSTGRES_PASSWORD: ci
+    DATABASE_URL: "postgres://ci:ci@postgres:5432/migration_check"
+  script:
+    # Example uses sqlx — swap for `diesel migration run` if the
+    # project uses Diesel instead
+    - cargo install sqlx-cli --locked --no-default-features --features postgres
+    - sqlx migrate run
+    - sqlx migrate revert --target-version 0
+
+pact-contract-verify:
+  stage: contract
+  <<: *setup-rust
+  script:
+    - cargo install cargo-nextest --locked
+    - cargo nextest run --test pact_tests
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - "src/handlers/**"
+        - "src/routes/**"
+
+# ---------------------------------------------------------------------------
+# STAGE 6: REGRESSION — insta snapshot testing
+# ---------------------------------------------------------------------------
+
+golden-file-regression:
+  stage: regression
+  <<: *setup-rust
+  script:
+    - cargo install cargo-nextest cargo-insta --locked
+    # Runs ONLY tests/regression_tests.rs. Never run `cargo insta
+    # accept` or set INSTA_UPDATE=always in CI — accepting a changed
+    # snapshot is a human decision made locally via `cargo insta
+    # review` after confirming the change was intentional, same rule
+    # as every other language's regression gate in this skill
+    - cargo nextest run --test regression_tests
+  artifacts:
+    when: on_failure
+    paths:
+      # insta writes a *.snap.new file next to *.snap on mismatch —
+      # keep it so the failure is diffable without rerunning locally
+      - "**/*.snap.new"
+    expire_in: 3 days
+
+# ---------------------------------------------------------------------------
+# STAGE 7: DEPLOY GATE
+# ---------------------------------------------------------------------------
+
+smoke-test:
+  stage: deploy-gate
+  image: mcr.microsoft.com/playwright:v1.48.0-jammy
+  script:
+    - npx playwright test tests/smoke --reporter=line
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy-production:
+  stage: deploy-gate
+  needs: ["smoke-test"]
+  script:
+    - echo "Deploying — replace with real deploy step (binary/container/k8s)"
+    - echo "Configure your CD platform's health-check + auto-rollback here"
+  environment:
+    name: production
+    on_stop: rollback-production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+
+rollback-production:
+  stage: deploy-gate
+  script:
+    - echo "Rollback triggered — wire this to your CD platform's rollback command"
+  environment:
+    name: production
+    action: stop
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual

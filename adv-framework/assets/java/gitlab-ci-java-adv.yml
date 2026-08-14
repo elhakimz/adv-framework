@@ -1,0 +1,229 @@
+# ============================================================================
+# Automated Deterministic Verification pipeline — Java / Maven / GitLab CI
+# Each stage only runs if the previous stage passed. Every job is pass/fail —
+# no "warning only" jobs are allowed to sit in a blocking stage.
+# ============================================================================
+
+include:
+  # GitLab-managed templates — maintained upstream, less to hand-roll
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+stages:
+  - static
+  - build
+  - unit
+  - property
+  - contract
+  - regression
+  - deploy-gate
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+  MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end -DinstallAtEnd=true -DdeployAtEnd=true"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .m2/repository
+
+# ---------------------------------------------------------------------------
+# STAGE 1: STATIC — cheapest, fastest, fails first
+# ---------------------------------------------------------------------------
+
+checkstyle:
+  stage: static
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - mvn $MAVEN_CLI_OPTS checkstyle:check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+pmd:
+  stage: static
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - mvn $MAVEN_CLI_OPTS pmd:check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# semgrep runs alongside GitLab's SAST template for custom rules
+# (e.g. project-specific patterns GitLab's default ruleset won't catch)
+semgrep-custom:
+  stage: static
+  image: semgrep/semgrep
+  script:
+    - semgrep scan --config .semgrep/rules.yml --error
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# sast, dependency_scanning, secret_detection jobs come from the included
+# templates above — no need to redefine them, they inherit the `test` stage
+# by default; pin them to `static` explicitly so ordering is correct:
+sast:
+  stage: static
+
+dependency_scanning:
+  stage: static
+
+secret_detection:
+  stage: static
+
+# ---------------------------------------------------------------------------
+# STAGE 2: BUILD — compiles or the pipeline stops
+# ---------------------------------------------------------------------------
+
+build:
+  stage: build
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - mvn $MAVEN_CLI_OPTS compile
+  artifacts:
+    paths:
+      - target/classes
+    expire_in: 1 hour
+
+# ---------------------------------------------------------------------------
+# STAGE 3: UNIT — JUnit 5 + JaCoCo diff-coverage gate
+# ---------------------------------------------------------------------------
+
+unit-test:
+  stage: unit
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - mvn $MAVEN_CLI_OPTS test
+    - mvn jacoco:report
+  coverage: '/Total.*?([0-9]{1,3})%/'
+  artifacts:
+    reports:
+      junit:
+        - target/surefire-reports/TEST-*.xml
+      coverage_report:
+        coverage_format: jacoco
+        path: target/site/jacoco/jacoco.xml
+    paths:
+      - target/site/jacoco
+    expire_in: 1 week
+
+# Enforces coverage on the CHANGED lines, not just overall repo % —
+# overall coverage can look fine while new code ships untested.
+diff-coverage-gate:
+  stage: unit
+  image: python:3.12-slim
+  needs: ["unit-test"]
+  script:
+    - pip install diff-cover
+    - diff-cover target/site/jacoco/jacoco.xml --compare-branch=origin/$CI_DEFAULT_BRANCH --fail-under=80
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# STAGE 4: PROPERTY / INVARIANT — jqwik, generates adversarial inputs
+# ---------------------------------------------------------------------------
+
+property-test:
+  stage: property
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    # jqwik tests are just tagged JUnit 5 tests — run via a dedicated profile
+    # so they don't silently blend into the unit-test job above
+    - mvn $MAVEN_CLI_OPTS test -Pproperty-tests
+  artifacts:
+    reports:
+      junit:
+        - target/surefire-reports/TEST-*.xml
+
+# ---------------------------------------------------------------------------
+# STAGE 5: CONTRACT / INTEGRATION — API schema + DB migration checks
+# ---------------------------------------------------------------------------
+
+openapi-contract-test:
+  stage: contract
+  image: schemathesis/schemathesis
+  script:
+    # Fuzzes the running API against its own OpenAPI spec —
+    # combines contract validation with property-based input generation
+    - schemathesis run --checks all openapi.yml --base-url=$STAGING_API_URL
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+flyway-migration-check:
+  stage: contract
+  image: flyway/flyway
+  services:
+    - postgres:16
+  variables:
+    POSTGRES_DB: migration_check
+    POSTGRES_USER: ci
+    POSTGRES_PASSWORD: ci
+  script:
+    # Applies every migration against a throwaway DB —
+    # catches broken/irreversible migrations before staging ever sees them
+    - flyway -url=jdbc:postgresql://postgres:5432/migration_check -user=ci -password=ci migrate
+
+pact-contract-verify:
+  stage: contract
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - mvn $MAVEN_CLI_OPTS pact:verify
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - "**/*Controller.java"
+        - "**/api/**"
+
+# ---------------------------------------------------------------------------
+# STAGE 6: REGRESSION — golden-file / snapshot comparison
+# ---------------------------------------------------------------------------
+
+golden-file-regression:
+  stage: regression
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - mvn $MAVEN_CLI_OPTS test -Pregression-tests
+  artifacts:
+    when: on_failure
+    paths:
+      - target/regression-diffs
+    expire_in: 3 days
+
+# ---------------------------------------------------------------------------
+# STAGE 7: DEPLOY GATE — smoke test + auto-rollback trigger
+# Only runs on the default branch, after every prior gate is green
+# ---------------------------------------------------------------------------
+
+smoke-test:
+  stage: deploy-gate
+  image: mcr.microsoft.com/playwright:v1.48.0-jammy
+  script:
+    - npx playwright test tests/smoke --reporter=line
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy-production:
+  stage: deploy-gate
+  needs: ["smoke-test"]
+  script:
+    - echo "Deploying — replace with real deploy step (Helm/Argo/etc.)"
+    - echo "Configure your CD platform's health-check + auto-rollback here"
+  environment:
+    name: production
+    on_stop: rollback-production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+
+rollback-production:
+  stage: deploy-gate
+  script:
+    - echo "Rollback triggered — wire this to your CD platform's rollback command"
+  environment:
+    name: production
+    action: stop
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
