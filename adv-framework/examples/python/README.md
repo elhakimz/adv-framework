@@ -12,6 +12,12 @@ From this directory:
 pip install -e ".[dev]"
 ```
 
+If your shell's default `python`/`pip` aren't the toolchain you want (e.g.
+multiple Python installs on PATH), make sure the interpreter whose `pip`
+you used above is also the one whose `Scripts`/`bin` directory is on PATH
+when you run the hook below — it calls `ruff`, `mypy`, `pytest`, etc. by
+bare name.
+
 ## Run the hook
 
 No copying needed — the hook script's commands operate on your current
@@ -20,6 +26,9 @@ directory, not on where the script file itself lives:
 ```bash
 sh ../../assets/python/pre-push.sh
 ```
+
+If default-branch resolution fails (e.g. no network access to parse
+`git remote show origin`), set `export ADV_DEFAULT_BRANCH=main` first.
 
 ## What you'll see the first time
 
@@ -31,7 +40,7 @@ The **static** stage fails on exactly one check:
 ❌ static failed
 ```
 
-`ruff check .`, `mypy --strict src/`, and `bandit -r src/ -q` all pass —
+`ruff check .`, `mypy src/ --strict`, and `bandit -r src/ -q` all pass —
 only formatting is broken. This project ships with `src/calculator/__init__.py`
 containing one single-quoted string where `ruff format` wants double quotes,
 specifically so you see the hook's collect-all-failures reporting do

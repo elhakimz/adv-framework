@@ -59,6 +59,10 @@ once per machine:
 
 ## Installing the hook
 
+A runnable example with the hook already wired up lives at
+`adv-framework/examples/python/` — try it there first if you want to see
+the hook work before setting one up in your own project.
+
 ```bash
 mkdir -p .githooks
 cp adv-framework/assets/<lang>/pre-push.sh .githooks/pre-push

@@ -1,4 +1,3 @@
-# adv-framework/examples/python/tests/test_calculator_property.py
 """Property tests for the calculator module — see tests/test_calculator.py for
 the unit tests these complement. Marked `property` so the local pre-push
 hook's Unit stage (`-m "not property and not regression"`) skips these and
