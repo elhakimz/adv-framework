@@ -22,20 +22,21 @@ Don't try to hold all of ADV's detail in working memory for a specific task. Loa
 - **`references/gate-structure.md`** — the full 7-gate table, the ratchet rule, why property/regression tests are isolated per-language (different mechanism per ecosystem), incremental adoption order, non-goals, and mutation testing. Read this before explaining ADV conceptually or designing a pipeline from scratch.
 - **`references/security.md`** — how security spans multiple gates (not just static), the expanded tool set (Trivy, Syft, ZAP, cosign), severity-based blocking policy, and the agent-specific suppression-file risk. Read this when the user's request touches security scanning, SAST/DAST, container scanning, or CVE handling.
 - **`references/kanban-integration.md`** — mapping pipeline state to Kanban board state (Plane.so native integration vs Asana's comment-only integration requiring custom webhook glue), and the "Human Gate" column pattern. Read this when the user wants pipeline results visible on a project board.
+- **`references/local-verification.md`** — the opt-in pre-push hook scripts (`assets/<lang>/pre-push.sh`), what they run locally vs. leave to CI, and the prerequisites per language. Read this when the user wants faster local feedback before pushing — and note explicitly that this is a convenience layer, not a merge gate; CI + CODEOWNERS remain what's actually enforced.
 
 ## When the user wants a working pipeline — use the bundled assets, don't regenerate from scratch
 
 Each language has a complete, tested `.gitlab-ci.yml` plus the matching build-tool config already written. **Copy and adapt these rather than writing new ones from first principles** — they already encode the correct per-ecosystem isolation mechanism for property/regression tests, which is easy to get wrong if generated ad hoc.
 
-| Language | CI pipeline | Build-tool config | Example tests |
-|---|---|---|---|
-| Java (Maven) | `assets/java/gitlab-ci-java-adv.yml` | `assets/java/pom-adv-fragment.xml` | — |
-| Python | `assets/python/gitlab-ci-python-adv.yml` | `assets/python/pyproject-adv-fragment.toml` | `assets/python/test_example_markers.py` |
-| .NET (ASP.NET) | `assets/dotnet/gitlab-ci-dotnet-adv.yml` | `assets/dotnet/Directory.Build.props` | `assets/dotnet/ExampleTests.cs` |
-| Go | `assets/golang/gitlab-ci-golang-adv.yml` | `assets/golang/.golangci.yml` | `assets/golang/calculator_test.go`, `calculator_property_test.go`, `report_regression_test.go` |
-| Node.js (TypeScript) | `assets/nodejs/gitlab-ci-nodejs-adv.yml` | `assets/nodejs/eslint.config.js` + three Vitest configs (`vitest.config.ts`, `vitest.property.config.ts`, `vitest.regression.config.ts`) | `assets/nodejs/calculator.test.ts`, `calculator.property.test.ts`, `report.regression.test.ts` |
-| Bun | `assets/bun/gitlab-ci-bun-adv.yml` | `assets/bun/biome.json`, `assets/bun/bunfig.toml` | `assets/bun/tests/{unit,property,regression}/*.test.ts` — directory placement is the isolation mechanism, not the filename |
-| Rust | `assets/rust/gitlab-ci-rust-adv.yml` | `assets/rust/deny.toml` | `assets/rust/src/calculator.rs` (inline unit tests), `assets/rust/tests/property_tests.rs`, `assets/rust/tests/regression_tests.rs` — Cargo's own `tests/` directory convention is the isolation mechanism, nothing extra needed |
+| Language | CI pipeline | Build-tool config | Example tests | Local hook |
+|---|---|---|---|---|
+| Java (Maven) | `assets/java/gitlab-ci-java-adv.yml` | `assets/java/pom-adv-fragment.xml` | — | `assets/java/pre-push.sh` |
+| Python | `assets/python/gitlab-ci-python-adv.yml` | `assets/python/pyproject-adv-fragment.toml` | `assets/python/test_example_markers.py` | `assets/python/pre-push.sh` |
+| .NET (ASP.NET) | `assets/dotnet/gitlab-ci-dotnet-adv.yml` | `assets/dotnet/Directory.Build.props` | `assets/dotnet/ExampleTests.cs` | `assets/dotnet/pre-push.sh` |
+| Go | `assets/golang/gitlab-ci-golang-adv.yml` | `assets/golang/.golangci.yml` | `assets/golang/calculator_test.go`, `calculator_property_test.go`, `report_regression_test.go` | `assets/golang/pre-push.sh` |
+| Node.js (TypeScript) | `assets/nodejs/gitlab-ci-nodejs-adv.yml` | `assets/nodejs/eslint.config.js` + three Vitest configs (`vitest.config.ts`, `vitest.property.config.ts`, `vitest.regression.config.ts`) | `assets/nodejs/calculator.test.ts`, `calculator.property.test.ts`, `report.regression.test.ts` | `assets/nodejs/pre-push.sh` |
+| Bun | `assets/bun/gitlab-ci-bun-adv.yml` | `assets/bun/biome.json`, `assets/bun/bunfig.toml` | `assets/bun/tests/{unit,property,regression}/*.test.ts` — directory placement is the isolation mechanism, not the filename | `assets/bun/pre-push.sh` |
+| Rust | `assets/rust/gitlab-ci-rust-adv.yml` | `assets/rust/deny.toml` | `assets/rust/src/calculator.rs` (inline unit tests), `assets/rust/tests/property_tests.rs`, `assets/rust/tests/regression_tests.rs` — Cargo's own `tests/` directory convention is the isolation mechanism, nothing extra needed | `assets/rust/pre-push.sh` |
 
 Each pipeline follows the identical 7-stage structure (static → build → unit → property → contract → regression → deploy-gate) with stack-appropriate tools. When presenting one to a user:
 1. Copy the relevant `.gitlab-ci.yml` and build-config fragment.
