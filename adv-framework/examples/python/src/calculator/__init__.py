@@ -23,5 +23,5 @@ def divide(a: int, b: int) -> float:
         ZeroDivisionError: if b is 0.
     """
     if b == 0:
-        raise ZeroDivisionError("b must not be zero")
+        raise ZeroDivisionError('b must not be zero')
     return a / b
