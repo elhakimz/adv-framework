@@ -64,38 +64,46 @@ Each implementation follows the same 7-stage structure with stack-appropriate to
     ├── references/
     │   ├── gate-structure.md       # full 7-gate table, ratchet rule, isolation mechanisms
     │   ├── security.md             # security's expanded tool set, blocking policy
-    │   └── kanban-integration.md   # pipeline state → Kanban board state
+    │   ├── kanban-integration.md   # pipeline state → Kanban board state
+    │   └── local-verification.md   # pre-push hook: what it runs, prerequisites, install
     └── assets/
         ├── java/
         │   ├── gitlab-ci-java-adv.yml
-        │   └── pom-adv-fragment.xml
+        │   ├── pom-adv-fragment.xml
+        │   └── pre-push.sh
         ├── python/
         │   ├── gitlab-ci-python-adv.yml
         │   ├── pyproject-adv-fragment.toml
-        │   └── test_example_markers.py
+        │   ├── test_example_markers.py
+        │   └── pre-push.sh
         ├── dotnet/
         │   ├── gitlab-ci-dotnet-adv.yml
         │   ├── Directory.Build.props
-        │   └── ExampleTests.cs
+        │   ├── ExampleTests.cs
+        │   └── pre-push.sh
         ├── golang/
         │   ├── gitlab-ci-golang-adv.yml
         │   ├── .golangci.yml
         │   ├── calculator_test.go
         │   ├── calculator_property_test.go
-        │   └── report_regression_test.go
+        │   ├── report_regression_test.go
+        │   └── pre-push.sh
         ├── nodejs/
         │   ├── gitlab-ci-nodejs-adv.yml
         │   ├── eslint.config.js
         │   ├── vitest.config.ts / vitest.property.config.ts / vitest.regression.config.ts
-        │   └── calculator.test.ts, calculator.property.test.ts, report.regression.test.ts
+        │   ├── calculator.test.ts, calculator.property.test.ts, report.regression.test.ts
+        │   └── pre-push.sh
         ├── bun/
         │   ├── gitlab-ci-bun-adv.yml
         │   ├── biome.json, bunfig.toml
-        │   └── tests/{unit,property,regression}/  # isolation is directory structure, not naming
+        │   ├── tests/{unit,property,regression}/  # isolation is directory structure, not naming
+        │   └── pre-push.sh
         ├── rust/
         │   ├── gitlab-ci-rust-adv.yml
         │   ├── deny.toml
-        │   └── src/, tests/  # Cargo's own test-target system provides isolation
+        │   ├── src/, tests/  # Cargo's own test-target system provides isolation
+        │   └── pre-push.sh
         ├── guardrails/
         │   ├── CODEOWNERS                  # complete, all-7-ecosystems version
         │   └── claude-code-settings.json
@@ -186,7 +194,7 @@ before a push instead of after one. It doesn't change what's enforced:
 the CI pipeline and `CODEOWNERS` remain the only things that actually
 gate a merge, and `git push --no-verify` skips it entirely.
 
-Each language ships an opt-in pre-push hook (`assets/<lang>/pre-push.sh`)
+Each language ships an opt-in pre-push hook (`adv-framework/assets/<lang>/pre-push.sh`)
 that runs Static, Build, Unit (with diff-coverage), and Property locally
 — the four gates that need nothing but your own toolchain. Contract,
 Regression, and Deploy Gate stay CI-only. See

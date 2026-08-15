@@ -29,6 +29,17 @@ Regression (slow, and CI deliberately treats snapshot-updates as a human
 decision — not something to rush through in a pre-push hook), Deploy Gate
 (needs a real environment). These stay CI-only.
 
+## What it writes to your working tree
+
+Running these scripts produces per-language build/coverage artifacts in
+the checkout — e.g. `coverage.xml`, `coverage.out`, `gosec-report.xml`,
+`unit-report.xml`, `security-scan.log`, `coverage/`, `coverage-report/`,
+`TestResults/`, `dist/`, `target/`, depending on language — and they
+persist after the script exits. Make sure these are in the project's
+`.gitignore` (and any linter's ignore file), since a stale artifact left
+over from one push can otherwise make the *next* push's static stage
+fail on files the hook itself created.
+
 ## Prerequisites
 
 Each script assumes its language's linters/scanners/coverage tools are
@@ -42,8 +53,8 @@ once per machine:
 | Python | `pip install ruff mypy bandit build diff-cover` |
 | .NET | `dotnet tool install -g dotnet-reportgenerator-globaltool`, `pip install diff-cover` |
 | Go | `go install github.com/securego/gosec/v2/cmd/gosec@latest`, `go install golang.org/x/vuln/cmd/govulncheck@latest`, `go install github.com/AlekSi/gocov-xml@latest`, `go install github.com/axw/gocov/gocov@latest`, `pip install diff-cover`, golangci-lint (see its own install docs) |
-| Node.js | `npm install` (uses `npx`, no separate global install) |
-| Bun | `bun install --frozen-lockfile`, `pip install lcov_cobertura` |
+| Node.js | `npm install` (uses `npx`, no separate global install), `pip install diff-cover` |
+| Bun | `bun install --frozen-lockfile`, `pip install lcov_cobertura`, `pip install diff-cover` |
 | Rust | `cargo install cargo-nextest cargo-llvm-cov cargo-audit cargo-deny --locked`, `rustup component add llvm-tools-preview`, `pip install diff-cover` |
 
 ## Installing the hook

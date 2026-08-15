@@ -6,7 +6,7 @@
 #
 # NOT part of what's enforced. This is fast local feedback, not a gate —
 # CI + CODEOWNERS are what actually gate a merge. See
-# references/local-verification.md before wiring this up.
+# adv-framework/references/local-verification.md before wiring this up.
 #
 # sast/dependency_scanning/secret_detection are GitLab-template jobs with
 # no local CLI equivalent — intentionally not mirrored here.
@@ -42,7 +42,7 @@ run_stage() {
 run_stage "static" \
   "golangci-lint run --timeout=5m ./..." \
   "test -z \"\$(gofmt -l .)\"" \
-  "gosec -fmt=junit-xml -out=gosec-report.xml ./..." \
+  "gosec ./..." \
   "govulncheck ./..."
 [ "$fail" -eq 1 ] && exit 1
 
@@ -51,6 +51,7 @@ run_stage "build" \
 [ "$fail" -eq 1 ] && exit 1
 
 DEFAULT_BRANCH="${ADV_DEFAULT_BRANCH:-$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')}"
+[ -n "$DEFAULT_BRANCH" ] || { echo "Could not resolve default branch; set ADV_DEFAULT_BRANCH" >&2; exit 1; }
 git fetch -q origin "$DEFAULT_BRANCH"
 run_stage "unit" \
   "go test ./... -race -coverprofile=coverage.out -covermode=atomic" \

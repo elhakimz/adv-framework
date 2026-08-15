@@ -6,14 +6,15 @@
 #
 # NOT part of what's enforced. This is fast local feedback, not a gate —
 # CI + CODEOWNERS are what actually gate a merge. See
-# references/local-verification.md before wiring this up.
+# adv-framework/references/local-verification.md before wiring this up.
 #
 # sast/dependency_scanning/secret_detection are GitLab-template jobs with
 # no local CLI equivalent — intentionally not mirrored here.
 #
 # Prerequisites: `bun install --frozen-lockfile` already run, and
-# lcov_cobertura installed for python3 (`pip install lcov_cobertura`) —
-# this script does not install either on every push.
+# lcov_cobertura and diff-cover installed for python3
+# (`pip install lcov_cobertura diff-cover`) — this script does not
+# install either on every push.
 set -u
 fail=0
 
@@ -45,6 +46,7 @@ run_stage "build" \
 [ "$fail" -eq 1 ] && exit 1
 
 DEFAULT_BRANCH="${ADV_DEFAULT_BRANCH:-$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')}"
+[ -n "$DEFAULT_BRANCH" ] || { echo "Could not resolve default branch; set ADV_DEFAULT_BRANCH" >&2; exit 1; }
 git fetch -q origin "$DEFAULT_BRANCH"
 run_stage "unit" \
   "bun test tests/unit --coverage --coverage-reporter=lcov --coverage-dir=coverage" \
