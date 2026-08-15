@@ -14,6 +14,11 @@
 # Prerequisites: `npm install` already run (node_modules present), and
 # `pip install diff-cover` — this script does not run `npm ci` or install
 # diff-cover on every push.
+#
+# Unit stage drops CI's `--reporter=junit --outputFile=unit-report.xml`
+# flags — locally you want vitest's failures printed to the terminal,
+# not only written to a junit XML file. `--coverage` is kept since
+# diff-cover still needs the coverage output.
 set -u
 fail=0
 

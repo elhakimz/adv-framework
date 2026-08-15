@@ -18,6 +18,10 @@
 #   go install github.com/axw/gocov/gocov@latest
 #   pip install diff-cover
 #   golangci-lint on PATH (see https://golangci-lint.run/usage/install/)
+#
+# Static stage's gosec drops CI's `-fmt=junit-xml -out=gosec-report.xml`
+# flags — locally you want findings printed to the terminal, not only
+# written to a junit XML file.
 set -u
 fail=0
 

@@ -32,9 +32,9 @@ decision — not something to rush through in a pre-push hook), Deploy Gate
 ## What it writes to your working tree
 
 Running these scripts produces per-language build/coverage artifacts in
-the checkout — e.g. `coverage.xml`, `coverage.out`, `gosec-report.xml`,
-`unit-report.xml`, `security-scan.log`, `coverage/`, `coverage-report/`,
-`TestResults/`, `dist/`, `target/`, depending on language — and they
+the checkout — e.g. `coverage.xml`, `coverage.out`, `security-scan.log`,
+`coverage/`, `coverage-report/`, `TestResults/`, `dist/`, `target/`,
+depending on language — and they
 persist after the script exits. Make sure these are in the project's
 `.gitignore` (and any linter's ignore file), since a stale artifact left
 over from one push can otherwise make the *next* push's static stage
