@@ -1,0 +1,80 @@
+[project]
+name = "adv-example-calculator"
+version = "0.1.0"
+description = "Runnable example demonstrating the ADV framework's local pre-push verification hook (Python)."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+    "bandit>=1.7.10",
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "hypothesis>=6.115.0",
+    "build>=1.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---------------------------------------------------------------------------
+# ruff — lint + format, replaces flake8/isort/black in one tool
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes core
+    "I",             # isort (import ordering)
+    "UP",            # pyupgrade — flags outdated syntax
+    "B",             # bugbear — common bug patterns
+    "C4",            # comprehension simplifications
+    "SIM",           # code simplification suggestions
+]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["calculator"]
+
+# ---------------------------------------------------------------------------
+# mypy — strict typing gate
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# bandit — Python-specific SAST
+# ---------------------------------------------------------------------------
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+
+# ---------------------------------------------------------------------------
+# pytest — the `property` marker is what lets the hook run it in isolation
+# via `-m property` / `-m "not property and not regression"`
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+markers = [
+    "property: Hypothesis-based property/invariant tests (slower, run in their own CI stage)",
+]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*"]
