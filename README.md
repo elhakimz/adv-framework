@@ -6,6 +6,34 @@ A language-agnostic CI/CD pipeline pattern for minimizing **verification debt** 
 
 ---
 
+## Installing this skill
+
+This repo's skill is the `adv-framework/` folder (the one containing `SKILL.md`, `references/`, and `assets/`) — Claude Code auto-discovers skills placed in a `skills/` directory, either user-wide or per-project.
+
+**User-wide** (available in every project):
+
+```bash
+cp -r adv-framework ~/.claude/skills/adv-framework
+```
+
+**Project-only** (available just in one project):
+
+```bash
+cp -r adv-framework /path/to/your-project/.claude/skills/adv-framework
+```
+
+Start a new Claude Code session afterward — skills load at session start, not mid-session.
+
+To keep the installed copy updated via `git pull` in this repo instead of re-copying, symlink instead of copying:
+
+```bash
+ln -s "$(pwd)/adv-framework" ~/.claude/skills/adv-framework
+```
+
+(On Windows, use `New-Item -ItemType SymbolicLink` from an elevated PowerShell, or `Copy-Item -Recurse` if you'd rather not deal with elevation.)
+
+---
+
 ## Why this exists
 
 Coding agents can generate large volumes of code far faster than a human can read every diff line by line. That speed doesn't automatically produce correct software — it produces **verification debt**: a gap between "code was written" and "code was actually checked," which grows silently until it surfaces as a production incident.
