@@ -90,7 +90,7 @@ Each implementation follows the same 7-stage structure with stack-appropriate to
 └── adv-framework/                  # the skill itself
     ├── SKILL.md
     ├── references/
-    │   ├── gate-structure.md       # full 7-gate table, ratchet rule, isolation mechanisms
+    │   ├── gate-structure.md       # full 7-gate table, ratchet rule, isolation mechanisms, anti-gaming rules, further checks
     │   ├── security.md             # security's expanded tool set, blocking policy
     │   ├── kanban-integration.md   # pipeline state → Kanban board state
     │   └── local-verification.md   # pre-push hook: what it runs, prerequisites, install

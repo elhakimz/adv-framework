@@ -26,7 +26,7 @@ LLM review still has a legitimate place — flagging ambiguity, suggesting what 
 
 ## Anti-gaming rules
 
-`CODEOWNERS` and agent permission scoping (see the README's "Guarding against agent-specific failure modes") prevent an agent from *committing* a weakened check. These rules name the behavior those guardrails exist to stop, so an agent working under ADV avoids the shapes deliberately rather than discovering them at a blocked merge:
+`CODEOWNERS` and agent permission scoping (see SKILL.md's "Guardrails against agent-specific failure modes") prevent an agent from *committing* a weakened check. These rules name the behavior those guardrails exist to stop, so an agent working under ADV avoids the shapes deliberately rather than discovering them at a blocked merge:
 
 1. **Never weaken a test to make it pass** — no broadened assertions, added skips, raised tolerances, or deleted failing tests.
 2. **Never edit a test and its implementation in the same step** to reach green. Change one, observe the result, then change the other.
@@ -94,11 +94,11 @@ Nothing in a passing test suite penalizes a 200-line function, so agent-generate
 |---|---|
 | Java | Checkstyle's `CyclomaticComplexity` module |
 | Python | ruff's `C901` — add `"C90"` to `select` in `[tool.ruff.lint]` plus a `[tool.ruff.lint.mccabe] max-complexity` value (the shipped fragment selects `C4`, which is flake8-comprehensions, not mccabe) |
-| .NET | Roslyn analyzer `CA1502` |
+| .NET | Roslyn analyzer `CA1502` (off by default — enable explicitly, e.g. via `.editorconfig` severity configuration) |
 | Go | `gocyclo` or `cyclop` — both bundled with golangci-lint; `assets/golang/.golangci.yml` uses `disable-all: true`, so enabling one is a single line in its `enable:` list |
 | Node.js | ESLint's `complexity` rule |
 | Bun | Biome's `noExcessiveCognitiveComplexity` |
-| Rust | `clippy::cognitive_complexity` |
+| Rust | `clippy::cognitive_complexity` (allow-by-default nursery lint — does nothing until enabled; carries nursery false-positive caveats) |
 
 ### Suite health
 
