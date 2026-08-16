@@ -24,6 +24,19 @@ When something escapes to production despite a green pipeline, the fix is never 
 
 LLM review still has a legitimate place — flagging ambiguity, suggesting what to test, summarizing a large diff for a human — but it should always route work *toward* a human or *toward* a new deterministic check, never stand in as the final merge gate itself.
 
+## Anti-gaming rules
+
+`CODEOWNERS` and agent permission scoping (see the README's "Guarding against agent-specific failure modes") prevent an agent from *committing* a weakened check. These rules name the behavior those guardrails exist to stop, so an agent working under ADV avoids the shapes deliberately rather than discovering them at a blocked merge:
+
+1. **Never weaken a test to make it pass** — no broadened assertions, added skips, raised tolerances, or deleted failing tests.
+2. **Never edit a test and its implementation in the same step** to reach green. Change one, observe the result, then change the other.
+3. **Never mock the unit under test**, or mock so heavily that the test only exercises the mocks.
+4. **Never add a test solely to raise a coverage number.** A test that executes lines without asserting behavior defeats the diff-coverage gate rather than satisfying it — it converts a real gate into a green light.
+5. **Never report a check that wasn't run.** An honestly declared skip preserves trust; a fabricated pass destroys the only thing the gates are for.
+6. **A failing gate blocks done.** Work is not complete while any gate is red — the ratchet rule applied at the scale of a single task.
+
+Adapted from [old-coder](https://github.com/AmazingAng/old-coder) (MIT, © AmazingAng).
+
 ## Why isolate property/regression tests from the default unit run
 
 Property-based tests and golden-file/snapshot tests are valuable but slow (property tests run hundreds of generated inputs; snapshot tests often touch the filesystem). Every language ecosystem in this skill uses a different mechanism to keep them out of the fast default test run, and only pull them in during their own CI stage:
@@ -68,3 +81,41 @@ Coverage percentage measures whether a line *executed* during tests, not whether
 - Rust: `cargo-mutants`
 
 Recommended as a nightly/weekly job rather than per-commit, given the runtime cost.
+
+## Further recommended checks (not in the default pipelines)
+
+Like mutation testing above, these are recommended additions rather than shipped pipeline stages. Each is deterministic; none is a new gate — complexity folds into **Static**, suite health runs on a schedule alongside the pipeline, and real execution is a pre-push habit rather than an automated stage.
+
+### Complexity budget
+
+Nothing in a passing test suite penalizes a 200-line function, so agent-generated code drifts toward unmaintainable shapes that every existing gate happily approves. A complexity ceiling belongs in the **Static** gate — same cost profile as linting, no reason to defer it.
+
+| Language | Tool |
+|---|---|
+| Java | Checkstyle's `CyclomaticComplexity` module |
+| Python | ruff's `C901` — add `"C90"` to `select` in `[tool.ruff.lint]` plus a `[tool.ruff.lint.mccabe] max-complexity` value (the shipped fragment selects `C4`, which is flake8-comprehensions, not mccabe) |
+| .NET | Roslyn analyzer `CA1502` |
+| Go | `gocyclo` or `cyclop` — both bundled with golangci-lint; `assets/golang/.golangci.yml` uses `disable-all: true`, so enabling one is a single line in its `enable:` list |
+| Node.js | ESLint's `complexity` rule |
+| Bun | Biome's `noExcessiveCognitiveComplexity` |
+| Rust | `clippy::cognitive_complexity` |
+
+### Suite health
+
+A suite that passes only in one order, or passes only intermittently, is not a deterministic gate — it is a gate that sometimes lies, which is worse than no gate because it trains people to re-run instead of investigate. Best as a nightly/weekly job, same cost rationale as mutation testing.
+
+| Language | Tool |
+|---|---|
+| Java | JUnit 5's `@TestMethodOrder(MethodOrderer.Random.class)` |
+| Python | `pytest-randomly` |
+| .NET | No first-party randomizer. Toggling `[assembly: CollectionBehavior(DisableTestParallelization = true)]` surfaces parallelism-dependent assumptions, but genuine order randomization needs a third-party runner extension — the weakest story of the seven ecosystems here. |
+| Go | `go test -shuffle=on` |
+| Node.js | `vitest --sequence.shuffle` |
+| Bun | Check Bun's current test-runner docs for a randomization flag before relying on one — Bun ships frequently and has had gaps here. Absent a flag, splitting `tests/unit/` across separate `bun test` invocations surfaces the coarsest ordering coupling. |
+| Rust | `cargo nextest run` — already the runner in ADV's Rust pipeline; it runs each test in its own process by default, which surfaces shared-state coupling with no extra configuration |
+
+### Real execution before push
+
+The failure this catches is "passes tests, doesn't run": an import that resolves under the test harness but not at runtime, config the tests stub out, an entry point nobody actually invoked. ADV covers this as the Deploy Gate's smoke test — but that runs after merge. Running the CLI, endpoint, or app once locally on realistic input needs no tooling and catches the most embarrassing class of failure before it reaches a pipeline.
+
+Adapted from [old-coder](https://github.com/AmazingAng/old-coder) (MIT, © AmazingAng).
