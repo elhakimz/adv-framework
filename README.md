@@ -202,7 +202,7 @@ The `CODEOWNERS` and permission-scoping guardrails from the next section apply d
 
 ## Guarding against agent-specific failure modes
 
-Deterministic gates catch *incorrect* code. They don't, by themselves, stop an agent with broad write access from "fixing" a red pipeline by weakening the thing that checks it — skipping a test, loosening an assertion, or editing the pipeline config directly. Two structural guardrails close that gap:
+Deterministic gates catch *incorrect* code. They don't, by themselves, stop an agent with broad write access from "fixing" a red pipeline by weakening the thing that checks it — skipping a test, loosening an assertion, or editing the pipeline config directly. These guardrails close that gap:
 
 ### 1. `CODEOWNERS`
 Requires explicit human approval on any change to test files, pipeline configs, lint rulesets, golden/snapshot files, and dependency manifests — regardless of whether a human or an agent authored the diff. An agent can freely modify implementation code; it cannot silently modify what "correct" means.
@@ -211,7 +211,19 @@ Requires explicit human approval on any change to test files, pipeline configs, 
 Tool-level deny/ask rules (e.g. Claude Code's `.claude/settings.json`) prevent an agent from editing pipeline/test-quality files even mid-session, or force an explicit approval prompt before it does. Configure the equivalent wherever your agent tooling exposes permission scoping — the principle transfers even where the config format doesn't.
 
 ### 3. Mutation testing (recommended, not yet wired into the pipelines above)
-Coverage percentage measures whether a line *executed* during tests, not whether a test would actually *catch* a bug in that line — a real gap when the same agent both implements and writes its own tests. Mutation testing tools (`PIT` / Java, `Stryker` / .NET & JS, `mutmut` / Python, `go-mutesting` / Go) inject small bugs and check whether the suite catches them, surfacing tests that pass without verifying anything. Recommended as a nightly/weekly job rather than per-commit, given the runtime cost.
+Coverage percentage measures whether a line *executed* during tests, not whether a test would actually *catch* a bug in that line — a real gap when the same agent both implements and writes its own tests. Mutation testing tools (`PIT` / Java, `Stryker` / .NET & JS, `mutmut` / Python, `go-mutesting` / Go) inject small bugs and check whether the suite catches them, surfacing tests that pass without verifying anything. Recommended as a nightly/weekly job rather than per-commit, given the runtime cost. Three further recommended checks — a complexity budget, suite-health runs for flaky and order-dependent tests, and real execution before push — are documented alongside it in `adv-framework/references/gate-structure.md`.
+
+### 4. Anti-gaming rules
+Items 1 and 2 stop an agent from *committing* a weakened check. These name the behavior those guardrails exist to prevent, so an agent working under ADV avoids the shapes deliberately rather than discovering them at a blocked merge:
+
+- Never weaken a test to make it pass.
+- Never edit a test and its implementation in the same step to reach green.
+- Never mock the unit under test.
+- Never add a test solely to raise a coverage number.
+- Never report a check that wasn't run.
+- A failing gate blocks done.
+
+Full treatment, with the rationale for each, in `adv-framework/references/gate-structure.md`.
 
 ---
 
