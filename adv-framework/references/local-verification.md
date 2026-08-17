@@ -60,8 +60,9 @@ once per machine:
 ## Installing the hook
 
 A runnable example with the hook already wired up lives at
-`adv-framework/examples/python/` — try it there first if you want to see
-the hook work before setting one up in your own project.
+`examples/python/`, relative to this bundle's root — try it there first
+if you want to see the hook work before setting one up in your own
+project.
 
 ```bash
 mkdir -p .githooks

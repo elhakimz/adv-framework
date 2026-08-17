@@ -99,3 +99,151 @@ def test_render_marks_skips_unmistakably(capsys):
     out = capsys.readouterr().out
     assert "SKIPPED" in out
     assert "shellcheck not on PATH" in out
+
+
+# --------------------------------------------------------------------
+# Check 1: path references
+# --------------------------------------------------------------------
+
+def test_path_ref_resolving_in_bundle_passes(tmp_path):
+    make_repo(tmp_path, {
+        "adv-framework/SKILL.md": "See `references/gate-structure.md` for detail.\n",
+        "adv-framework/references/gate-structure.md": "# Gates\n",
+    })
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_bundle_ref_resolving_only_at_repo_root_fails(tmp_path):
+    """The original defect: a bundle file pointing outside the bundle."""
+    make_repo(tmp_path, {
+        "adv-framework/SKILL.md": "See `docs/notes/thing.md` for detail.\n",
+        "docs/notes/thing.md": "# Thing\n",
+    })
+    findings = bc.check_path_refs(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "docs/notes/thing.md" in findings[0].message
+
+
+def test_path_ref_resolving_nowhere_fails(tmp_path):
+    make_repo(tmp_path, {"adv-framework/SKILL.md": "See `references/ghost.md`.\n"})
+    assert len(bc.check_path_refs(ctx_for(tmp_path)).findings) == 1
+
+
+def test_bare_filename_is_not_treated_as_a_path(tmp_path):
+    """`pre-push.sh`, `mypy`, `.gitlab-ci.yml` are mentions, not paths."""
+    make_repo(tmp_path, {
+        "adv-framework/SKILL.md":
+            "Run `pre-push.sh`, install `mypy`, create `.gitlab-ci.yml`.\n",
+    })
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_lang_placeholder_requires_all_seven(tmp_path):
+    files = {"adv-framework/SKILL.md": "Copy `assets/<lang>/pre-push.sh`.\n"}
+    for lang in bc.LANGS:
+        if lang != "rust":
+            files[f"adv-framework/assets/{lang}/pre-push.sh"] = "#!/usr/bin/env sh\n"
+    make_repo(tmp_path, files)
+    findings = bc.check_path_refs(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "rust" in findings[0].message
+
+
+def test_lang_placeholder_all_seven_present_passes(tmp_path):
+    files = {"adv-framework/SKILL.md": "Copy `assets/<lang>/pre-push.sh`.\n"}
+    for lang in bc.LANGS:
+        files[f"adv-framework/assets/{lang}/pre-push.sh"] = "#!/usr/bin/env sh\n"
+    make_repo(tmp_path, files)
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_directory_conventions_are_not_checked(tmp_path):
+    """Trailing-slash tokens are conventions, artifacts, or URL fragments.
+
+    Checking these produced 31 false positives against the real repo.
+    """
+    make_repo(tmp_path, {
+        "adv-framework/SKILL.md":
+            "Put them in `tests/unit/`, ignore `coverage/`, POST to `/issues/`.\n",
+    })
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_glob_patterns_are_not_checked(tmp_path):
+    make_repo(tmp_path, {
+        "adv-framework/SKILL.md":
+            "Files `tests/*.rs` and `assets/bun/tests/{unit,property}/*.test.ts`.\n",
+    })
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_external_allowlist_is_not_checked(tmp_path):
+    """`.claude/settings.json` names a file in the reader's project."""
+    make_repo(tmp_path, {"README.md": "Configure `.claude/settings.json`.\n"})
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_bundle_doc_may_not_use_repo_root_prefix(tmp_path):
+    """From an installed bundle, `adv-framework/x` means adv-framework/adv-framework/x."""
+    make_repo(tmp_path, {
+        "adv-framework/references/g.md": "See `adv-framework/examples/python/foo.md`.\n",
+        "adv-framework/examples/python/foo.md": "# Foo\n",
+    })
+    findings = bc.check_path_refs(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "adv-framework/" in findings[0].message
+
+
+def test_root_readme_may_use_repo_root_prefix(tmp_path):
+    """The rule is bundle-only: README.md legitimately uses repo-root paths."""
+    make_repo(tmp_path, {
+        "README.md": "See `adv-framework/SKILL.md`.\n",
+        "adv-framework/SKILL.md": "# Skill\n",
+    })
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_root_readme_resolves_from_repo_root(tmp_path):
+    make_repo(tmp_path, {
+        "README.md": "See `adv-framework/SKILL.md`.\n",
+        "adv-framework/SKILL.md": "# Skill\n",
+    })
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+# --------------------------------------------------------------------
+# Check 2: documentary references
+# --------------------------------------------------------------------
+
+def test_quoted_section_present_passes(tmp_path):
+    make_repo(tmp_path, {
+        "adv-framework/references/g.md":
+            'See SKILL.md\'s "Guardrails against agent-specific failure modes".\n',
+        "adv-framework/SKILL.md":
+            "## Guardrails against agent-specific failure modes\n",
+    })
+    assert bc.check_doc_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_quoted_section_wrong_by_one_word_fails(tmp_path):
+    """The exact original defect: 'Guarding' vs 'Guardrails'."""
+    make_repo(tmp_path, {
+        "adv-framework/references/g.md":
+            'See SKILL.md\'s "Guarding against agent-specific failure modes".\n',
+        "adv-framework/SKILL.md":
+            "## Guardrails against agent-specific failure modes\n",
+    })
+    findings = bc.check_doc_refs(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "Guarding against agent-specific failure modes" in findings[0].message
+
+
+def test_bare_readme_reference_from_bundle_fails(tmp_path):
+    """`the README's "..."` from inside the bundle: README does not ship."""
+    make_repo(tmp_path, {
+        "adv-framework/references/g.md": 'See the README\'s "Some Section".\n',
+        "README.md": "## Some Section\n",
+    })
+    findings = bc.check_doc_refs(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "README" in findings[0].message
