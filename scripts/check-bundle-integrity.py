@@ -31,8 +31,10 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -316,7 +318,100 @@ def update_manifest(ctx: Context) -> int:
     return 0
 
 
+def check_shellcheck(ctx: Context) -> CheckResult:
+    """Run shellcheck against the COMMITTED bytes of every shipped hook.
+
+    Committed bytes matter twice over here: on a Windows checkout the
+    working tree holds CRLF while the index holds LF, so linting the
+    tree reports SC1017 errors that do not exist in what ships; and
+    conversely, CRLF that really is committed would break every Unix
+    user at the shebang, which this check must catch.
+    """
+    res = CheckResult("shellcheck")
+    if shutil.which("shellcheck") is None:
+        res.skipped_reason = ("shellcheck not on PATH -- install with "
+                              "`pip install shellcheck-py`")
+        return res
+
+    hooks = sorted(p for p in committed_paths(ctx)
+                   if p.startswith("adv-framework/assets/")
+                   and p.endswith("/pre-push.sh"))
+    with tempfile.TemporaryDirectory() as tmp:
+        for hook in hooks:
+            raw = read_committed_bytes(ctx, hook)
+            if raw is None:
+                continue
+            if b"\r\n" in raw:
+                res.findings.append(Finding(
+                    "shellcheck", hook,
+                    "committed with CRLF line endings -- a CRLF shebang "
+                    "fails on Linux/macOS with 'bad interpreter'. Check "
+                    ".gitattributes."))
+                continue
+            scratch = Path(tmp) / hook.replace("/", "_")
+            scratch.write_bytes(raw)
+            proc = subprocess.run(
+                ("shellcheck", "-s", "sh", "-f", "gcc", str(scratch)),
+                capture_output=True, text=True)
+            for line in proc.stdout.splitlines():
+                if line.strip():
+                    res.findings.append(Finding(
+                        "shellcheck", hook, line.split(":", 1)[-1].strip()))
+    return res
+
+
+def check_ci_structure(ctx: Context) -> CheckResult:
+    """Every job's stage is declared; every `needs` target exists.
+
+    Not full GitLab CI schema validation -- that needs GitLab's CI Lint
+    API and a project token. These are the two invariants a local edit
+    realistically breaks.
+    """
+    res = CheckResult("ci-structure")
+    try:
+        import yaml
+    except ImportError:
+        res.skipped_reason = "PyYAML not installed -- `pip install pyyaml`"
+        return res
+
+    reserved = {"stages", "variables", "cache", "include", "default",
+                "workflow", "image", "before_script", "after_script"}
+
+    pipelines = sorted(p for p in committed_paths(ctx)
+                       if p.startswith("adv-framework/assets/")
+                       and "/gitlab-ci-" in p and p.endswith(".yml"))
+    for rel in pipelines:
+        try:
+            doc = yaml.safe_load(read_committed(ctx, rel) or "") or {}
+        except yaml.YAMLError as exc:
+            res.findings.append(Finding("ci-structure", rel,
+                                        f"does not parse as YAML: {exc}"))
+            continue
+        stages = doc.get("stages", [])
+        jobs = {k: v for k, v in doc.items()
+                if k not in reserved and not k.startswith(".")
+                and isinstance(v, dict)}
+        for name, body in jobs.items():
+            stage = body.get("stage")
+            if stage is None:
+                res.findings.append(Finding("ci-structure", rel,
+                                            f"job {name!r} declares no stage"))
+            elif stage not in stages:
+                res.findings.append(Finding(
+                    "ci-structure", rel,
+                    f"job {name!r} uses stage {stage!r}, not in {stages}"))
+            for entry in body.get("needs") or []:
+                target = entry.get("job") if isinstance(entry, dict) else entry
+                if target not in jobs:
+                    res.findings.append(Finding(
+                        "ci-structure", rel,
+                        f"job {name!r} needs {target!r}, which is not a job "
+                        "in this file"))
+    return res
+
+
 CHECKS.extend([check_path_refs, check_doc_refs, check_manifest])
+CHECKS.extend([check_shellcheck, check_ci_structure])
 
 
 def exit_code_for(results: list[CheckResult]) -> int:

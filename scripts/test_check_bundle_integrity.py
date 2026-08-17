@@ -304,3 +304,91 @@ def test_update_rewrites_manifest(tmp_path):
 def test_heading_hash_ignores_body_text(tmp_path):
     """Only headings matter — prose edits must not trip the wire."""
     assert bc.heading_hash("## A\n\nlots of prose\n") == bc.heading_hash("## A\n\nother prose\n")
+
+
+# --------------------------------------------------------------------
+# Checks 4 and 5: shellcheck and CI structure
+# --------------------------------------------------------------------
+import shutil
+
+_CLEAN_SH = "#!/usr/bin/env sh\nset -u\necho \"hello\"\n"
+# SC2086: unquoted $x is word-split. A real bug sh -n cannot see.
+_DIRTY_SH = "#!/usr/bin/env sh\nx=\"a b\"\necho $x\n"
+
+_GOOD_CI = """\
+stages:
+  - static
+  - unit
+
+lint:
+  stage: static
+  script:
+    - echo lint
+
+test:
+  stage: unit
+  needs: ["lint"]
+  script:
+    - echo test
+"""
+
+needs_shellcheck = pytest.mark.skipif(
+    shutil.which("shellcheck") is None, reason="shellcheck not installed")
+
+
+@needs_shellcheck
+def test_shellcheck_clean_script_passes(tmp_path):
+    make_repo(tmp_path, {"adv-framework/assets/python/pre-push.sh": _CLEAN_SH})
+    assert bc.check_shellcheck(ctx_for(tmp_path)).findings == []
+
+
+@needs_shellcheck
+def test_shellcheck_catches_unquoted_expansion(tmp_path):
+    make_repo(tmp_path, {"adv-framework/assets/python/pre-push.sh": _DIRTY_SH})
+    findings = bc.check_shellcheck(ctx_for(tmp_path)).findings
+    assert findings and "SC2086" in findings[0].message
+
+
+@needs_shellcheck
+def test_shellcheck_catches_committed_crlf(tmp_path):
+    """Guards the .gitattributes invariant: CRLF in the index breaks Unix."""
+    make_repo(tmp_path, {"adv-framework/assets/python/pre-push.sh": _CLEAN_SH},
+              crlf_paths=("adv-framework/assets/python/pre-push.sh",))
+    findings = bc.check_shellcheck(ctx_for(tmp_path)).findings
+    assert findings and any("CRLF" in f.message or "SC1017" in f.message
+                            for f in findings)
+
+
+def test_shellcheck_missing_tool_is_skipped_not_passed(tmp_path, monkeypatch):
+    make_repo(tmp_path, {"adv-framework/assets/python/pre-push.sh": _CLEAN_SH})
+    monkeypatch.setattr(bc.shutil, "which", lambda name: None)
+    result = bc.check_shellcheck(ctx_for(tmp_path))
+    assert result.skipped_reason is not None
+    assert result.findings == []
+    assert bc.exit_code_for([result]) == 2   # never a clean 0
+
+
+def test_ci_structure_valid_pipeline_passes(tmp_path):
+    make_repo(tmp_path, {"adv-framework/assets/python/gitlab-ci-python-adv.yml": _GOOD_CI})
+    assert bc.check_ci_structure(ctx_for(tmp_path)).findings == []
+
+
+def test_ci_structure_undeclared_stage_fails(tmp_path):
+    bad = _GOOD_CI.replace("  stage: unit", "  stage: nonexistent")
+    make_repo(tmp_path, {"adv-framework/assets/python/gitlab-ci-python-adv.yml": bad})
+    findings = bc.check_ci_structure(ctx_for(tmp_path)).findings
+    assert findings and "nonexistent" in findings[0].message
+
+
+def test_ci_structure_dangling_needs_fails(tmp_path):
+    bad = _GOOD_CI.replace('needs: ["lint"]', 'needs: ["ghost"]')
+    make_repo(tmp_path, {"adv-framework/assets/python/gitlab-ci-python-adv.yml": bad})
+    findings = bc.check_ci_structure(ctx_for(tmp_path)).findings
+    assert findings and "ghost" in findings[0].message
+
+
+def test_ci_structure_template_stub_jobs_are_not_findings(tmp_path):
+    """sast/dependency_scanning/secret_detection have no script by design."""
+    stub = _GOOD_CI + "\nsast:\n  stage: static\n"
+    make_repo(tmp_path, {"adv-framework/assets/python/gitlab-ci-python-adv.yml": stub})
+    assert bc.check_ci_structure(ctx_for(tmp_path)).findings == []
