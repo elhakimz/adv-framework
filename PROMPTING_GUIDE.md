@@ -16,6 +16,7 @@ Know these defaults so you know when it's safe to omit detail, and when omitting
 | Which language | Claude will ask rather than guess if genuinely ambiguous — but a vague prompt with clues ("our Spring Boot service") will get Java assumed without asking, so confirm it picked correctly |
 | Kanban tool | Nothing assumed — generic advice unless you name Plane, Asana, or another tool specifically. Naming the tool matters a lot here since Plane's GitLab integration is native and Asana's isn't; a generic prompt gets a generic (less useful) answer |
 | Java build tool | Maven. Say "Gradle" if that's your project — the plugin mechanics differ enough that Claude shouldn't guess |
+| Local vs CI | CI. The bundled pipelines are the deliverable; the local pre-push hooks are opt-in and advisory. Say "locally" or "before I push" if that's what you mean |
 
 ---
 
@@ -51,10 +52,28 @@ Naming the specific agent tool matters — the `claude-code-settings.json` asset
 
 ### Adding a language not yet covered
 
-**Weak**: "add Rust support"
-**Better**: "Add Rust support. We use `cargo nextest` for tests and `criterion` for benchmarks if there's a property-testing equivalent worth using — otherwise pick something idiomatic and explain the isolation mechanism choice like you did for Bun."
+Seven languages ship with complete assets: Java, Python, .NET, Go, Node.js, Bun, and Rust. For anything else:
 
-If you have existing tooling preferences, say so — otherwise Claude picks idiomatic defaults, but it's worth explicitly asking it to explain *why* it chose a given test-isolation mechanism (marker vs tag vs directory vs config-file split), since that reasoning is often the most transferable part of the answer.
+**Weak**: "add Kotlin support"
+**Better**: "Add Kotlin support. We use Gradle and Kotest. Pick an idiomatic property-testing library and explain the test-isolation mechanism choice the way the skill does for Bun and Rust."
+
+If you have existing tooling preferences, say so — otherwise Claude picks idiomatic defaults. It's worth explicitly asking it to explain *why* it chose a given test-isolation mechanism (marker vs tag vs directory vs config-file split), since that reasoning is the most transferable part of the answer. Bun and Rust are the useful reference points: Bun's isolation is directory structure because its runner has no exclude-glob mechanism, and Rust needs no convention at all because Cargo's test-target system already separates unit from integration tests.
+
+### Running the gates locally before you push
+
+**Weak**: "can I run this locally"
+**Better**: "Set up the local pre-push hook for our Python service. We're on macOS and don't have `diff-cover` installed yet — give me the one-time setup, and tell me which gates won't run locally."
+
+Each language ships a `pre-push.sh` that runs Static, Build, Unit (with diff-coverage), and Property. Contract, Regression, and Deploy Gate stay CI-only by design. Asking which gates *don't* run locally is the useful half of the question — it's the difference between "my hook passed" and "my hook passed the four cheap gates."
+
+Worth knowing: the hook is explicitly **advisory**, not a gate. It's bypassable with `--no-verify` and absent until someone installs it. If you prompt for "a local gate that blocks bad commits," expect Claude to push back on the framing — CI and `CODEOWNERS` are what actually enforce anything.
+
+### Hardening beyond the seven gates
+
+**Weak**: "what else should we add"
+**Better**: "Our agents keep producing 200-line functions that pass every gate. What deterministic check catches that, and which stage does it belong in?"
+
+Three checks are documented as recommended additions rather than shipped pipeline stages: a complexity budget (belongs in Static), suite-health runs for flaky and order-dependent tests (scheduled, like mutation testing), and actually executing the app once locally before pushing. Naming the *symptom* you're seeing gets you the right one; asking generically gets you all three plus mutation testing.
 
 ### Kanban integration
 
@@ -73,6 +92,16 @@ This is specific to ADV and worth calling out directly: don't ask Claude (or an 
 **Ask for**: "What deterministic test or gate would catch it if this PR is wrong?" — then actually add that gate and let the pipeline decide, not the review.
 
 This isn't a minor phrasing nitpick — it's the difference between using this skill correctly and quietly reintroducing the exact failure mode it was built to close.
+
+### The subtler version: prompts that invite gate-weakening
+
+The blunt anti-pattern is easy to spot. These are harder, because each sounds like a reasonable request:
+
+- "Get the pipeline green" — invites weakening whatever is red rather than fixing it.
+- "The coverage gate is failing, add some tests" — invites tests that execute lines without asserting anything, which satisfies the number and defeats the gate.
+- "This test is flaky, can you skip it for now" — a flaky test is a gate that sometimes lies; skipping converts it into one that never fires.
+
+Ask instead for the underlying fix: "Why is this gate red, and what's the smallest change to the *implementation* that makes it pass?" `references/gate-structure.md` has six anti-gaming rules covering the specific shapes this takes — worth reading if you're setting expectations for an agent with repo write access, since `CODEOWNERS` and permission scoping prevent an agent from *committing* a weakened check, but only the rules tell it not to try.
 
 ---
 
@@ -107,5 +136,7 @@ You don't need exact keywords — natural descriptions of the underlying need wo
 - "CODEOWNERS for an agent-heavy repo"
 - "property-based testing" / "mutation testing" / "golden-file testing"
 - "wire pipeline results into [Plane/Asana/Jira]"
+- "run the checks before I push" / "pre-push hook"
+- "stop the agent from weakening tests to get green"
 
 Simple one-line lookups ("what does `dotnet test --filter` do") may not trigger the skill even when related — Claude can usually answer those directly without consulting it, which is expected behavior, not a triggering failure.
