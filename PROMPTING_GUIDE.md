@@ -101,7 +101,7 @@ The blunt anti-pattern is easy to spot. These are harder, because each sounds li
 - "The coverage gate is failing, add some tests" — invites tests that execute lines without asserting anything, which satisfies the number and defeats the gate.
 - "This test is flaky, can you skip it for now" — a flaky test is a gate that sometimes lies; skipping converts it into one that never fires.
 
-Ask instead for the underlying fix: "Why is this gate red, and what's the smallest change to the *implementation* that makes it pass?" `references/gate-structure.md` has six anti-gaming rules covering the specific shapes this takes — worth reading if you're setting expectations for an agent with repo write access, since `CODEOWNERS` and permission scoping prevent an agent from *committing* a weakened check, but only the rules tell it not to try.
+Ask instead for the underlying fix: "Why is this gate red, and what's the smallest change to the *implementation* that makes it pass?" `adv-framework/references/gate-structure.md` has six anti-gaming rules covering the specific shapes this takes — worth reading if you're setting expectations for an agent with repo write access, since `CODEOWNERS` and permission scoping prevent an agent from *committing* a weakened check, but only the rules tell it not to try.
 
 ---
 
