@@ -533,10 +533,48 @@ def test_lang_placeholder_all_seven_present_passes(tmp_path):
     assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
 
 
-def test_directory_reference_resolves(tmp_path):
+def test_directory_conventions_are_not_checked(tmp_path):
+    """Trailing-slash tokens are conventions, artifacts, or URL fragments.
+
+    Checking these produced 31 false positives against the real repo.
+    """
     make_repo(tmp_path, {
-        "adv-framework/SKILL.md": "Tests live in `tests/unit/`.\n",
-        "adv-framework/tests/unit/a.md": "x\n",
+        "adv-framework/SKILL.md":
+            "Put them in `tests/unit/`, ignore `coverage/`, POST to `/issues/`.\n",
+    })
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_glob_patterns_are_not_checked(tmp_path):
+    make_repo(tmp_path, {
+        "adv-framework/SKILL.md":
+            "Files `tests/*.rs` and `assets/bun/tests/{unit,property}/*.test.ts`.\n",
+    })
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_external_allowlist_is_not_checked(tmp_path):
+    """`.claude/settings.json` names a file in the reader's project."""
+    make_repo(tmp_path, {"README.md": "Configure `.claude/settings.json`.\n"})
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_bundle_doc_may_not_use_repo_root_prefix(tmp_path):
+    """From an installed bundle, `adv-framework/x` means adv-framework/adv-framework/x."""
+    make_repo(tmp_path, {
+        "adv-framework/references/g.md": "See `adv-framework/examples/python/foo.md`.\n",
+        "adv-framework/examples/python/foo.md": "# Foo\n",
+    })
+    findings = bc.check_path_refs(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "adv-framework/" in findings[0].message
+
+
+def test_root_readme_may_use_repo_root_prefix(tmp_path):
+    """The rule is bundle-only: README.md legitimately uses repo-root paths."""
+    make_repo(tmp_path, {
+        "README.md": "See `adv-framework/SKILL.md`.\n",
+        "adv-framework/SKILL.md": "# Skill\n",
     })
     assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
 
@@ -600,8 +638,6 @@ Expected: all fail with `AttributeError: module 'bundle_check' has no attribute 
 Insert into `scripts/check-bundle-integrity.py`, after `doc_paths` and before `exit_code_for`:
 
 ```python
-import re
-
 BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 
 # `<doc>'s "Section Title"` — doc may be `SKILL.md`, `gate-structure.md`,
@@ -609,6 +645,12 @@ BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 DOC_REF_RE = re.compile(r"\b(README|[A-Za-z0-9_.-]+\.md)'s\s+\"([^\"]+)\"")
 
 HEADING_RE = re.compile(r"^(#{2,3})\s+(.*?)\s*$", re.MULTILINE)
+
+# A glob is a pattern, not a path to resolve.
+GLOB_CHARS = frozenset("*?{}[]")
+
+# Paths naming a file in the READER's project, not this repo.
+EXTERNAL_ALLOWLIST = frozenset({".claude/settings.json"})
 
 
 def resolve_bases(ctx: Context, containing_rel: str) -> list[str]:
@@ -626,9 +668,8 @@ def resolve_bases(ctx: Context, containing_rel: str) -> list[str]:
     return [containing_dir, ""]
 
 
-def _exists(ctx: Context, candidate: str, paths: set[str], dirs: set[str]) -> bool:
-    candidate = candidate.strip("/") if candidate.endswith("/") else candidate
-    return candidate in paths or candidate in dirs
+def _exists(candidate: str, paths: set[str]) -> bool:
+    return candidate in paths
 
 
 def _join(base: str, token: str) -> str:
@@ -636,35 +677,63 @@ def _join(base: str, token: str) -> str:
 
 
 def check_path_refs(ctx: Context) -> CheckResult:
-    """Backticked tokens containing '/' must resolve; bare names are mentions."""
+    """Backticked tokens that look like file paths must resolve.
+
+    A token counts as a path only if it contains '/', ends in a known
+    extension, has no glob metacharacter, and is not absolute. Anything
+    else is a *mention*: a tool name (`mypy`), an artifact (`coverage/`),
+    a URL fragment (`/issues/`), or a file the reader creates in their
+    own project (`.gitlab-ci.yml`).
+
+    Directory references are deliberately NOT checked. Counting
+    trailing-slash tokens as directories produced 31 false positives
+    against this repo -- directory conventions describing the reader's
+    project, REST URL fragments, and globs -- versus zero real defects.
+    """
     res = CheckResult("path-refs")
-    paths, dirs = committed_paths(ctx), committed_dirs(ctx)
+    paths = committed_paths(ctx)
 
     for doc in doc_paths(ctx):
         text = read_committed(ctx, doc) or ""
+        in_bundle = doc.startswith("adv-framework/")
         bases = resolve_bases(ctx, doc)
         for token in BACKTICK_RE.findall(text):
             token = token.strip()
-            if "/" not in token:
-                continue  # a mention (tool name, artifact, user's own file)
-            if not (token.endswith(EXTS) or token.endswith("/")):
+            if "/" not in token or token in EXTERNAL_ALLOWLIST:
+                continue
+            if token.startswith("/"):
+                continue  # URL fragment or absolute path
+            if GLOB_CHARS & set(token):
+                continue  # a pattern, not a path
+            # A bundle doc must read correctly from inside an INSTALLED
+            # bundle, where a repo-root path like adv-framework/x means
+            # adv-framework/adv-framework/x. This is the same defect class
+            # as the dead README pointer that motivated this checker.
+            if in_bundle and token.startswith("adv-framework/"):
+                res.findings.append(Finding(
+                    "path-refs", doc,
+                    f"reference `{token}` starts with `adv-framework/` inside "
+                    "the bundle; from an installed skill that resolves to "
+                    "adv-framework/adv-framework/... -- make it relative to "
+                    "the bundle root"))
+                continue
+            if not token.endswith(EXTS):
                 continue
             expansions = ([token.replace("<lang>", lang) for lang in LANGS]
                           if "<lang>" in token else [token])
             for expanded in expansions:
-                if not any(_exists(ctx, _join(b, expanded), paths, dirs)
-                           for b in bases):
+                if not any(_exists(_join(b, expanded), paths) for b in bases):
                     res.findings.append(Finding(
                         "path-refs", doc,
                         f"reference `{expanded}` does not resolve within "
-                        f"{'the bundle' if doc.startswith('adv-framework/') else 'the repo'}"))
+                        f"{'the bundle' if in_bundle else 'the repo'}"))
     return res
 
 
 def check_doc_refs(ctx: Context) -> CheckResult:
     """`<doc>'s "Section"` — doc must resolve and contain that heading."""
     res = CheckResult("doc-refs")
-    paths, dirs = committed_paths(ctx), committed_dirs(ctx)
+    paths = committed_paths(ctx)
 
     for doc in doc_paths(ctx):
         text = read_committed(ctx, doc) or ""
@@ -672,7 +741,7 @@ def check_doc_refs(ctx: Context) -> CheckResult:
         for named, section in DOC_REF_RE.findall(text):
             filename = "README.md" if named == "README" else named
             target = next((_join(b, filename) for b in bases
-                           if _exists(ctx, _join(b, filename), paths, dirs)), None)
+                           if _exists(_join(b, filename), paths)), None)
             if target is None:
                 res.findings.append(Finding(
                     "doc-refs", doc,
@@ -691,7 +760,7 @@ def check_doc_refs(ctx: Context) -> CheckResult:
 CHECKS.extend([check_path_refs, check_doc_refs])
 ```
 
-Move the `import re` to the top of the file with the other imports rather than leaving it mid-file.
+Add `import re` to the imports at the **top** of the file, alongside the existing ones — not mid-file.
 
 - [ ] **Step 4: Run the full test file**
 
@@ -699,9 +768,30 @@ Run:
 ```bash
 "/c/Users/HP/AppData/Local/Programs/Python/Python310/python.exe" -m pytest scripts/test_check_bundle_integrity.py -v
 ```
-Expected: `19 passed`.
+Expected: `23 passed`.
 
-- [ ] **Step 5: Run against the real repo**
+- [ ] **Step 5: Fix the one genuine finding this check surfaces**
+
+The new bundle-prefix rule flags a real defect at `adv-framework/references/local-verification.md:63`, which currently reads:
+
+```
+A runnable example with the hook already wired up lives at
+`adv-framework/examples/python/` — try it there first if you want to see
+the hook work before setting one up in your own project.
+```
+
+From inside an installed bundle that path resolves to `adv-framework/adv-framework/examples/python/`. Replace those three lines with:
+
+```
+A runnable example with the hook already wired up lives at
+`examples/python/`, relative to this bundle's root — try it there first
+if you want to see the hook work before setting one up in your own
+project.
+```
+
+Naming the base explicitly ("relative to this bundle's root") keeps it correct for both audiences: someone reading an installed skill, and someone browsing a clone of the repo.
+
+- [ ] **Step 6: Run against the real repo**
 
 Run:
 ```bash
@@ -709,12 +799,12 @@ Run:
 ```
 Expected: `ok  path-refs` and `ok  doc-refs`, exit 0.
 
-If either reports findings, investigate before proceeding: the design baseline says the repo is clean, so a finding means either a real regression or a checker bug. Do not edit `adv-framework/` to satisfy the checker without first confirming the checker is right.
+If anything else is reported, investigate before proceeding: with the revised ruleset the repo is expected clean apart from the Step 5 fix, so a further finding means either a real regression or a checker bug. Do not edit `adv-framework/` to satisfy the checker without first confirming the checker is right — Step 5 is the one edit this task authorises, and only because it was adjudicated as a genuine defect.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/check-bundle-integrity.py scripts/test_check_bundle_integrity.py
+git add scripts/check-bundle-integrity.py scripts/test_check_bundle_integrity.py adv-framework/references/local-verification.md
 git commit -m "$(cat <<'EOF'
 Add path-reference and documentary-reference checks
 
@@ -723,9 +813,17 @@ a bundle file pointing at a path that only resolves from the repo root
 (broken for every installation, since the bundle ships alone), and a
 quoted section title that does not exist in the doc it names.
 
-Backticked tokens count as paths only when they contain a slash — bare
-names like `mypy` or `.gitlab-ci.yml` are mentions, and checking them
-would false-positive on every one.
+A token counts as a path only when it has a slash, a known extension, no
+glob metacharacter, and no leading slash. Bare names like `mypy`,
+directory conventions like `coverage/`, and URL fragments like `/issues/`
+are mentions; checking them produced 31 false positives against this repo
+versus zero real defects.
+
+Also fixes the one genuine defect the new bundle-prefix rule surfaced:
+local-verification.md pointed at `adv-framework/examples/python/`, which
+from an installed bundle resolves to adv-framework/adv-framework/... —
+the same defect class as the dead README pointer that motivated this
+checker in the first place.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
