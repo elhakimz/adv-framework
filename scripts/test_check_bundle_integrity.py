@@ -247,3 +247,60 @@ def test_bare_readme_reference_from_bundle_fails(tmp_path):
     findings = bc.check_doc_refs(ctx_for(tmp_path)).findings
     assert len(findings) == 1
     assert "README" in findings[0].message
+
+
+# --------------------------------------------------------------------
+# Check 3: manifest freshness tripwire
+# --------------------------------------------------------------------
+import json
+
+_REF = "adv-framework/references/gate-structure.md"
+
+
+def _repo_with_manifest(tmp_path, ref_body: str, recorded_body: str | None = None):
+    repo = make_repo(tmp_path, {_REF: ref_body, "adv-framework/SKILL.md": "# S\n"})
+    body = ref_body if recorded_body is None else recorded_body
+    (repo / "scripts").mkdir(exist_ok=True)
+    (repo / "scripts" / "heading-manifest.json").write_text(
+        json.dumps({_REF: bc.heading_hash(body)}, indent=2), encoding="utf-8")
+    return repo
+
+
+def test_manifest_unchanged_passes(tmp_path):
+    _repo_with_manifest(tmp_path, "## One\n\n## Two\n")
+    assert bc.check_manifest(ctx_for(tmp_path)).findings == []
+
+
+def test_manifest_stale_when_heading_added(tmp_path):
+    _repo_with_manifest(tmp_path, "## One\n\n## Two\n\n## Three\n",
+                        recorded_body="## One\n\n## Two\n")
+    findings = bc.check_manifest(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "--update" in findings[0].message
+
+
+def test_manifest_detects_h3_change(tmp_path):
+    """### matters: SKILL.md's bullet names ### subsections by name."""
+    _repo_with_manifest(tmp_path, "## One\n\n### Sub A\n",
+                        recorded_body="## One\n\n### Sub B\n")
+    assert len(bc.check_manifest(ctx_for(tmp_path)).findings) == 1
+
+
+def test_manifest_detects_heading_rename_not_just_count(tmp_path):
+    _repo_with_manifest(tmp_path, "## Renamed\n\n## Two\n",
+                        recorded_body="## One\n\n## Two\n")
+    assert len(bc.check_manifest(ctx_for(tmp_path)).findings) == 1
+
+
+def test_update_rewrites_manifest(tmp_path):
+    repo = _repo_with_manifest(tmp_path, "## One\n\n## Two\n\n## Three\n",
+                               recorded_body="## One\n\n## Two\n")
+    c = ctx_for(tmp_path)
+    assert bc.check_manifest(c).findings          # stale before
+    assert bc.update_manifest(c) == 0
+    assert bc.check_manifest(c).findings == []    # clean after
+
+
+def test_heading_hash_ignores_body_text(tmp_path):
+    """Only headings matter — prose edits must not trip the wire."""
+    assert bc.heading_hash("## A\n\nlots of prose\n") == bc.heading_hash("## A\n\nother prose\n")

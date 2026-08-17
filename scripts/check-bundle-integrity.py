@@ -28,6 +28,8 @@ Install note for this machine: Avast TLS interception breaks PyPI, so
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -235,7 +237,86 @@ def check_doc_refs(ctx: Context) -> CheckResult:
     return res
 
 
-CHECKS.extend([check_path_refs, check_doc_refs])
+def heading_hash(text: str) -> str:
+    """Hash the ordered ## and ### headings of a document.
+
+    Both levels matter: SKILL.md's bullet for gate-structure.md names
+    "complexity budget, suite health, real execution", which are ###
+    subsections under one ## parent — a ##-only hash would miss a new or
+    renamed subsection the bullet should have mentioned.
+    """
+    headings = [f"{hashes} {title.strip()}"
+                for hashes, title in HEADING_RE.findall(text)]
+    return hashlib.sha256("\n".join(headings).encode("utf-8")).hexdigest()
+
+
+def manifest_path(ctx: Context) -> Path:
+    return ctx.repo_root / "scripts" / "heading-manifest.json"
+
+
+def _reference_docs(ctx: Context) -> list[str]:
+    return sorted(p for p in committed_paths(ctx)
+                  if p.startswith("adv-framework/references/") and p.endswith(".md"))
+
+
+def check_manifest(ctx: Context) -> CheckResult:
+    """Tripwire: flag that SKILL.md's described inputs changed.
+
+    Deliberately does NOT judge SKILL.md's prose. Its bullets describe
+    contents in wording that does not string-match the headings ("the
+    full 7-gate table" describes "The 7 gates, in order"), so fuzzy
+    matching would produce both false positives and false negatives.
+    This only reports that the described file changed and a human should
+    re-read the bullet. Zero false positives by construction.
+    """
+    res = CheckResult("manifest")
+    mpath = manifest_path(ctx)
+    if not mpath.exists():
+        res.findings.append(Finding(
+            "manifest", "scripts/heading-manifest.json",
+            "manifest missing; create it with --update"))
+        return res
+
+    recorded = json.loads(mpath.read_text(encoding="utf-8"))
+    for doc in _reference_docs(ctx):
+        actual = heading_hash(read_committed(ctx, doc) or "")
+        if doc not in recorded:
+            res.findings.append(Finding(
+                "manifest", doc,
+                "not in the heading manifest; SKILL.md may need a bullet "
+                "for it. Re-record with --update once SKILL.md is correct."))
+        elif recorded[doc] != actual:
+            res.findings.append(Finding(
+                "manifest", doc,
+                "headings changed since SKILL.md's manifest was last "
+                "verified. Re-read SKILL.md's bullet for this file, update "
+                "it if the change should be reflected there, then re-record "
+                "with --update."))
+    for doc in recorded:
+        if doc not in _reference_docs(ctx):
+            res.findings.append(Finding(
+                "manifest", doc,
+                "recorded in the manifest but no longer committed; "
+                "re-record with --update"))
+    return res
+
+
+def update_manifest(ctx: Context) -> int:
+    """Re-record heading hashes. A deliberate human action, never automated.
+
+    Mirrors how ADV treats snapshot updates throughout the framework.
+    The pre-push hook must never pass --update.
+    """
+    data = {doc: heading_hash(read_committed(ctx, doc) or "")
+            for doc in _reference_docs(ctx)}
+    path = manifest_path(ctx)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    print(f"Recorded {len(data)} reference-doc heading hashes to {path}")
+    return 0
+
+
+CHECKS.extend([check_path_refs, check_doc_refs, check_manifest])
 
 
 def exit_code_for(results: list[CheckResult]) -> int:
@@ -286,12 +367,6 @@ def main(argv: list[str] | None = None) -> int:
     results = [check(ctx) for check in CHECKS]
     render(results)
     return exit_code_for(results)
-
-
-def update_manifest(ctx: Context) -> int:
-    """Placeholder until Task 4 implements the manifest tripwire."""
-    print("--update: no manifest check registered yet")
-    return 0
 
 
 if __name__ == "__main__":
