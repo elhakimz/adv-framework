@@ -1,0 +1,30 @@
+#!/usr/bin/env sh
+# Runs the bundle self-check before push.
+#
+# ADVISORY, NOT A GATE. adv-framework/references/local-verification.md is
+# emphatic that a pre-push hook enforces nothing -- it is bypassable with
+# --no-verify and absent until someone runs the install step. CI and
+# CODEOWNERS are what actually gate a merge.
+#
+# Install:  git config core.hooksPath .githooks
+#
+# Exit 1 (findings) blocks the push. Exit 2 (a check could not run
+# because its tool is missing) warns loudly and allows it -- a missing
+# optional tool should not block a contributor, but must never be
+# mistaken for a clean run.
+set -u
+
+PY="${ADV_PYTHON:-python}"
+"$PY" scripts/check-bundle-integrity.py
+status=$?
+
+if [ "$status" -eq 1 ]; then
+  echo "bundle self-check found problems -- push blocked" >&2
+  exit 1
+elif [ "$status" -eq 2 ]; then
+  echo "WARNING: bundle self-check was incomplete (see SKIPPED above)." >&2
+  echo "Allowing the push, but this was NOT a clean run." >&2
+  exit 0
+fi
+
+exit 0
