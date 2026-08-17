@@ -42,12 +42,13 @@ from typing import Callable
 LANGS = ("java", "python", "dotnet", "golang", "nodejs", "bun", "rust")
 
 EXTS = (".md", ".yml", ".yaml", ".toml", ".json", ".sh", ".py",
-        ".xml", ".ts", ".js", ".go", ".rs", ".cs", ".props")
+        ".xml", ".ts", ".js", ".go", ".rs", ".cs", ".props", ".mermaid")
 
-# Docs that are part of the published product. docs/** is deliberately
-# excluded: plans and specs reference files that do not exist yet by
-# design, so including them would guarantee false positives.
-DOC_GLOBS = ("adv-framework/**/*.md", "README.md", "PROMPTING_GUIDE.md")
+# Extension-less shipped paths that check_path_refs should still resolve.
+# EXTS-based matching can never catch these (they have no extension by
+# design), so they need an explicit allowlist or a rename silently stops
+# being checked.
+EXTENSIONLESS_ALLOWLIST = frozenset({"assets/guardrails/CODEOWNERS"})
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,6 @@ class CheckResult:
 @dataclass
 class Context:
     repo_root: Path
-    bundle_root: Path
     rev: str = "HEAD"
 
 
@@ -100,15 +100,6 @@ def committed_paths(ctx: Context) -> set[str]:
     return {ln for ln in proc.stdout.decode("utf-8").splitlines() if ln}
 
 
-def committed_dirs(ctx: Context) -> set[str]:
-    dirs: set[str] = set()
-    for p in committed_paths(ctx):
-        parts = p.split("/")[:-1]
-        for i in range(1, len(parts) + 1):
-            dirs.add("/".join(parts[:i]))
-    return dirs
-
-
 def doc_paths(ctx: Context) -> list[str]:
     """Committed doc paths in scope, in stable order."""
     out = []
@@ -117,6 +108,8 @@ def doc_paths(ctx: Context) -> list[str]:
             out.append(p)
         elif p.startswith("adv-framework/") and p.endswith(".md"):
             out.append(p)
+        elif p.startswith("scripts/") and p.endswith(".md"):
+            out.append(p)
     return out
 
 
@@ -124,7 +117,12 @@ BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 
 # `<doc>'s "Section Title"` — doc may be `SKILL.md`, `gate-structure.md`,
 # or the bare word README (the original defect wrote "the README's").
-DOC_REF_RE = re.compile(r"\b(README|[A-Za-z0-9_.-]+\.md)'s\s+\"([^\"]+)\"")
+# Apostrophe and quotes accept both ASCII and typographic variants: no
+# typographic quotes exist in the docs today, but an editor autocorrect
+# turning a straight quote into a curly one would otherwise make this
+# check silently stop matching.
+DOC_REF_RE = re.compile(r"\b(README|[A-Za-z0-9_.-]+\.md)['’]s\s+"
+                        r"[\"“]([^\"”]+)[\"”]")
 
 HEADING_RE = re.compile(r"^(#{2,3})\s+(.*?)\s*$", re.MULTILINE)
 
@@ -150,10 +148,6 @@ def resolve_bases(ctx: Context, containing_rel: str) -> list[str]:
     return [containing_dir, ""]
 
 
-def _exists(candidate: str, paths: set[str]) -> bool:
-    return candidate in paths
-
-
 def _join(base: str, token: str) -> str:
     return f"{base}/{token}" if base else token
 
@@ -161,16 +155,24 @@ def _join(base: str, token: str) -> str:
 def check_path_refs(ctx: Context) -> CheckResult:
     """Backticked tokens that look like file paths must resolve.
 
-    A token counts as a path only if it contains '/', ends in a known
-    extension, has no glob metacharacter, and is not absolute. Anything
+    A token is checked if it contains '/', has no glob metacharacter, and
+    is not absolute, AND (it ends in a known extension, OR it is in
+    EXTENSIONLESS_ALLOWLIST, OR -- inside a bundle doc -- it starts with
+    `adv-framework/`, which is flagged regardless of extension). That
+    `adv-framework/`-prefix branch is load-bearing: the original defect
+    this check caught (`adv-framework/examples/python/`) had no
+    extension, so extension-gating alone would have missed it. Anything
     else is a *mention*: a tool name (`mypy`), an artifact (`coverage/`),
     a URL fragment (`/issues/`), or a file the reader creates in their
     own project (`.gitlab-ci.yml`).
 
-    Directory references are deliberately NOT checked. Counting
-    trailing-slash tokens as directories produced 31 false positives
-    against this repo -- directory conventions describing the reader's
-    project, REST URL fragments, and globs -- versus zero real defects.
+    Directory references are deliberately NOT checked: a bare
+    trailing-slash token (`tests/unit/`) is never resolved against the
+    tree, even when it names a real directory. Counting them produced 31
+    false positives against this repo -- directory conventions describing
+    the reader's project, REST URL fragments, and globs -- versus zero
+    real defects. This is a known, accepted coverage gap, not an
+    oversight.
     """
     res = CheckResult("path-refs")
     paths = committed_paths(ctx)
@@ -199,12 +201,12 @@ def check_path_refs(ctx: Context) -> CheckResult:
                     "adv-framework/adv-framework/... -- make it relative to "
                     "the bundle root"))
                 continue
-            if not token.endswith(EXTS):
+            if not token.endswith(EXTS) and token not in EXTENSIONLESS_ALLOWLIST:
                 continue
             expansions = ([token.replace("<lang>", lang) for lang in LANGS]
                           if "<lang>" in token else [token])
             for expanded in expansions:
-                if not any(_exists(_join(b, expanded), paths) for b in bases):
+                if not any(_join(b, expanded) in paths for b in bases):
                     res.findings.append(Finding(
                         "path-refs", doc,
                         f"reference `{expanded}` does not resolve within "
@@ -223,7 +225,7 @@ def check_doc_refs(ctx: Context) -> CheckResult:
         for named, section in DOC_REF_RE.findall(text):
             filename = "README.md" if named == "README" else named
             target = next((_join(b, filename) for b in bases
-                           if _exists(_join(b, filename), paths)), None)
+                           if _join(b, filename) in paths), None)
             if target is None:
                 res.findings.append(Finding(
                     "doc-refs", doc,
@@ -272,15 +274,24 @@ def check_manifest(ctx: Context) -> CheckResult:
     re-read the bullet. Zero false positives by construction.
     """
     res = CheckResult("manifest")
-    mpath = manifest_path(ctx)
-    if not mpath.exists():
-        res.findings.append(Finding(
-            "manifest", "scripts/heading-manifest.json",
-            "manifest missing; create it with --update"))
-        return res
 
-    recorded = json.loads(mpath.read_text(encoding="utf-8"))
-    for doc in _reference_docs(ctx):
+    # Every other input to this checker is committed bytes; the manifest
+    # must be too, or a regenerated-but-uncommitted manifest on disk would
+    # mask a stale committed one. Fall back to the working-tree file only
+    # when the manifest has never been committed at all (first-run case).
+    manifest_text = read_committed(ctx, "scripts/heading-manifest.json")
+    if manifest_text is None:
+        mpath = manifest_path(ctx)
+        if not mpath.exists():
+            res.findings.append(Finding(
+                "manifest", "scripts/heading-manifest.json",
+                "manifest missing; create it with --update"))
+            return res
+        manifest_text = mpath.read_text(encoding="utf-8")
+
+    recorded = json.loads(manifest_text)
+    ref_docs = _reference_docs(ctx)
+    for doc in ref_docs:
         actual = heading_hash(read_committed(ctx, doc) or "")
         if doc not in recorded:
             res.findings.append(Finding(
@@ -295,7 +306,7 @@ def check_manifest(ctx: Context) -> CheckResult:
                 "it if the change should be reflected there, then re-record "
                 "with --update."))
     for doc in recorded:
-        if doc not in _reference_docs(ctx):
+        if doc not in ref_docs:
             res.findings.append(Finding(
                 "manifest", doc,
                 "recorded in the manifest but no longer committed; "
@@ -334,8 +345,9 @@ def check_shellcheck(ctx: Context) -> CheckResult:
         return res
 
     hooks = sorted(p for p in committed_paths(ctx)
-                   if p.startswith("adv-framework/assets/")
-                   and p.endswith("/pre-push.sh"))
+                   if (p.startswith("adv-framework/assets/")
+                       and p.endswith("/pre-push.sh"))
+                   or p == ".githooks/pre-push")
     with tempfile.TemporaryDirectory() as tmp:
         for hook in hooks:
             raw = read_committed_bytes(ctx, hook)
@@ -410,8 +422,8 @@ def check_ci_structure(ctx: Context) -> CheckResult:
     return res
 
 
-CHECKS.extend([check_path_refs, check_doc_refs, check_manifest])
-CHECKS.extend([check_shellcheck, check_ci_structure])
+CHECKS.extend([check_path_refs, check_doc_refs, check_manifest,
+               check_shellcheck, check_ci_structure])
 
 
 def exit_code_for(results: list[CheckResult]) -> int:
@@ -452,9 +464,7 @@ def main(argv: list[str] | None = None) -> int:
         subprocess.run(("git", "rev-parse", "--show-toplevel"),
                        capture_output=True, text=True, check=True)
         .stdout.strip())
-    ctx = Context(repo_root=repo_root,
-                  bundle_root=repo_root / "adv-framework",
-                  rev=args.rev)
+    ctx = Context(repo_root=repo_root, rev=args.rev)
 
     if args.update:
         return update_manifest(ctx)

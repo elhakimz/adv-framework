@@ -32,6 +32,10 @@ ln -s "$(pwd)/adv-framework" ~/.claude/skills/adv-framework
 
 (On Windows, use `New-Item -ItemType SymbolicLink` from an elevated PowerShell, or `Copy-Item -Recurse` if you'd rather not deal with elevation.)
 
+### Contributing to this repo
+
+If you're contributing to this repo (not just installing the skill), a deterministic self-check and an optional pre-push hook are available: `git config core.hooksPath .githooks`. This is advisory tooling for contributors, not a gate, and it is not part of the shipped skill. See `scripts/README.md` for details.
+
 ---
 
 ## Why this exists

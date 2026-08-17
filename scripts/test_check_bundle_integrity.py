@@ -48,9 +48,7 @@ def make_repo(tmp_path: Path, files: dict[str, str], *, crlf_paths=()) -> Path:
 
 
 def ctx_for(tmp_path: Path) -> "bc.Context":
-    return bc.Context(repo_root=tmp_path,
-                      bundle_root=tmp_path / "adv-framework",
-                      rev="HEAD")
+    return bc.Context(repo_root=tmp_path, rev="HEAD")
 
 
 def test_read_committed_returns_text(tmp_path):
@@ -70,12 +68,10 @@ def test_read_committed_ignores_worktree_edits(tmp_path):
     assert bc.read_committed(ctx_for(tmp_path), "adv-framework/SKILL.md") == "# Committed\n"
 
 
-def test_committed_paths_and_dirs(tmp_path):
+def test_committed_paths(tmp_path):
     make_repo(tmp_path, {"adv-framework/assets/python/pre-push.sh": "#!/usr/bin/env sh\n"})
     c = ctx_for(tmp_path)
     assert "adv-framework/assets/python/pre-push.sh" in bc.committed_paths(c)
-    assert "adv-framework/assets/python" in bc.committed_dirs(c)
-    assert "adv-framework/assets" in bc.committed_dirs(c)
 
 
 def test_exit_code_zero_when_all_pass():
@@ -203,10 +199,13 @@ def test_root_readme_may_use_repo_root_prefix(tmp_path):
     assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
 
 
-def test_root_readme_resolves_from_repo_root(tmp_path):
+def test_root_readme_resolves_relative_to_its_own_directory(tmp_path):
+    """A root README reference also resolves via its containing dir (""),
+    not only via the `adv-framework/` prefix -- exercising the
+    `bases = [containing_dir, ""]` branch of resolve_bases."""
     make_repo(tmp_path, {
-        "README.md": "See `adv-framework/SKILL.md`.\n",
-        "adv-framework/SKILL.md": "# Skill\n",
+        "README.md": "See `docs/notes.md`.\n",
+        "docs/notes.md": "# Notes\n",
     })
     assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
 
@@ -264,6 +263,14 @@ def _repo_with_manifest(tmp_path, ref_body: str, recorded_body: str | None = Non
     (repo / "scripts" / "heading-manifest.json").write_text(
         json.dumps({_REF: bc.heading_hash(body)}, indent=2), encoding="utf-8")
     return repo
+
+
+def test_manifest_missing_reports_finding(tmp_path):
+    """Neither committed nor on disk: report, don't crash."""
+    make_repo(tmp_path, {_REF: "## One\n", "adv-framework/SKILL.md": "# S\n"})
+    findings = bc.check_manifest(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "manifest missing" in findings[0].message
 
 
 def test_manifest_unchanged_passes(tmp_path):
@@ -363,6 +370,17 @@ def test_shellcheck_missing_tool_is_skipped_not_passed(tmp_path, monkeypatch):
     make_repo(tmp_path, {"adv-framework/assets/python/pre-push.sh": _CLEAN_SH})
     monkeypatch.setattr(bc.shutil, "which", lambda name: None)
     result = bc.check_shellcheck(ctx_for(tmp_path))
+    assert result.skipped_reason is not None
+    assert result.findings == []
+    assert bc.exit_code_for([result]) == 2   # never a clean 0
+
+
+def test_ci_structure_missing_pyyaml_is_skipped_not_passed(tmp_path, monkeypatch):
+    """Mirrors test_shellcheck_missing_tool_is_skipped_not_passed: an
+    absent optional dependency must report SKIPPED, never a silent pass."""
+    make_repo(tmp_path, {"adv-framework/assets/python/gitlab-ci-python-adv.yml": _GOOD_CI})
+    monkeypatch.setitem(sys.modules, "yaml", None)  # forces `import yaml` to raise ImportError
+    result = bc.check_ci_structure(ctx_for(tmp_path))
     assert result.skipped_reason is not None
     assert result.findings == []
     assert bc.exit_code_for([result]) == 2   # never a clean 0

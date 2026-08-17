@@ -25,6 +25,9 @@ elif [ "$status" -eq 2 ]; then
   echo "WARNING: bundle self-check was incomplete (see SKIPPED above)." >&2
   echo "Allowing the push, but this was NOT a clean run." >&2
   exit 0
+elif [ "$status" -ne 0 ]; then
+  echo "bundle self-check did not run (exit $status) -- push blocked" >&2
+  exit 1
 fi
 
 exit 0

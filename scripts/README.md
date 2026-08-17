@@ -67,6 +67,12 @@ Never automate this, and never let the hook pass `--update` — accepting a
 changed baseline is a human decision, the same rule this framework
 applies to snapshot updates everywhere else.
 
+`check_manifest` reads the manifest from **committed bytes**, same as
+every other input. Commit the regenerated `scripts/heading-manifest.json`
+before you push — an uncommitted `--update` result is invisible to the
+checker and to the pre-push hook, so a stale committed manifest would
+otherwise slip through.
+
 ## Dependencies
 
 `pip install pyyaml shellcheck-py`. Missing tools are reported as
