@@ -210,6 +210,49 @@ def test_root_readme_resolves_relative_to_its_own_directory(tmp_path):
     assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
 
 
+def test_mermaid_extension_is_checked(tmp_path):
+    """Guards `.mermaid` staying in EXTS: a dangling reference must be flagged."""
+    make_repo(tmp_path, {
+        "adv-framework/SKILL.md": "See `diagrams/flow.mermaid` for detail.\n",
+    })
+    findings = bc.check_path_refs(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "diagrams/flow.mermaid" in findings[0].message
+
+
+# Literal, not `next(iter(bc.EXTENSIONLESS_ALLOWLIST))`: if the allowlist
+# is ever emptied, iterating it at collection time would raise
+# StopIteration and crash collection of this whole file instead of
+# failing the one test that guards the allowlist.
+_ALLOWLISTED = "assets/guardrails/CODEOWNERS"
+
+
+def test_extensionless_allowlist_absent_fails(tmp_path):
+    """Guards EXTENSIONLESS_ALLOWLIST staying non-empty: a reference to the
+    allowlisted extension-less path must still be resolved when missing."""
+    assert _ALLOWLISTED in bc.EXTENSIONLESS_ALLOWLIST
+    make_repo(tmp_path, {
+        "adv-framework/SKILL.md": f"See `{_ALLOWLISTED}`.\n",
+    })
+    findings = bc.check_path_refs(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert _ALLOWLISTED in findings[0].message
+
+
+def test_extensionless_allowlist_present_passes(tmp_path):
+    make_repo(tmp_path, {
+        "adv-framework/SKILL.md": f"See `{_ALLOWLISTED}`.\n",
+        f"adv-framework/{_ALLOWLISTED}": "* @owner\n",
+    })
+    assert bc.check_path_refs(ctx_for(tmp_path)).findings == []
+
+
+def test_doc_paths_includes_scripts_readme(tmp_path):
+    """Guards the `scripts/` arm added to doc_paths."""
+    make_repo(tmp_path, {"scripts/README.md": "# Scripts\n"})
+    assert "scripts/README.md" in bc.doc_paths(ctx_for(tmp_path))
+
+
 # --------------------------------------------------------------------
 # Check 2: documentary references
 # --------------------------------------------------------------------
@@ -313,6 +356,26 @@ def test_heading_hash_ignores_body_text(tmp_path):
     assert bc.heading_hash("## A\n\nlots of prose\n") == bc.heading_hash("## A\n\nother prose\n")
 
 
+def test_manifest_prefers_committed_bytes_over_dirty_worktree(tmp_path):
+    """The load-bearing property: a fresh worktree manifest must not mask
+    a stale committed one. A stale manifest is committed (missing the
+    "## Two" heading); a fresh, correct manifest is then written to the
+    working tree WITHOUT being committed. check_manifest must still flag
+    the doc as stale -- reading manifest_path(ctx).read_text() instead of
+    the committed bytes would silently pass this."""
+    stale = json.dumps({_REF: bc.heading_hash("## One\n")}, indent=2) + "\n"
+    fresh = json.dumps({_REF: bc.heading_hash("## One\n\n## Two\n")}, indent=2) + "\n"
+    repo = make_repo(tmp_path, {
+        _REF: "## One\n\n## Two\n",
+        "adv-framework/SKILL.md": "# S\n",
+        "scripts/heading-manifest.json": stale,
+    })
+    (repo / "scripts" / "heading-manifest.json").write_text(fresh, encoding="utf-8")
+    findings = bc.check_manifest(ctx_for(tmp_path)).findings
+    assert len(findings) == 1
+    assert "headings changed" in findings[0].message
+
+
 # --------------------------------------------------------------------
 # Checks 4 and 5: shellcheck and CI structure
 # --------------------------------------------------------------------
@@ -364,6 +427,14 @@ def test_shellcheck_catches_committed_crlf(tmp_path):
     findings = bc.check_shellcheck(ctx_for(tmp_path)).findings
     assert findings and any("CRLF" in f.message or "SC1017" in f.message
                             for f in findings)
+
+
+@needs_shellcheck
+def test_shellcheck_checks_githooks_pre_push(tmp_path):
+    """Guards the `.githooks/pre-push` arm of check_shellcheck's selector."""
+    make_repo(tmp_path, {".githooks/pre-push": _DIRTY_SH})
+    findings = bc.check_shellcheck(ctx_for(tmp_path)).findings
+    assert findings and "SC2086" in findings[0].message
 
 
 def test_shellcheck_missing_tool_is_skipped_not_passed(tmp_path, monkeypatch):
