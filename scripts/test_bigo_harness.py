@@ -96,7 +96,7 @@ def test_quadratic_with_iterating_inner_loop_is_not_mistaken_for_linear():
     A __getitem__-only CountingList reports exactly n ops here and passes
     O(n). If this test fails, __iter__ instrumentation has been removed.
     """
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=r"bound exceeded"):
         bh.assert_complexity_bound(quadratic_mixed, "O(n)", SIZES)
 
 
@@ -111,7 +111,7 @@ def test_linear_passes_linear():
 
 
 def test_linear_fails_logarithmic():
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=r"bound exceeded"):
         bh.assert_complexity_bound(linear_scan, "O(log n)", SIZES)
 
 
@@ -120,7 +120,7 @@ def test_binary_passes_logarithmic():
 
 
 def test_binary_fails_constant():
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=r"bound exceeded"):
         bh.assert_complexity_bound(binary_probe, "O(1)", SIZES)
 
 

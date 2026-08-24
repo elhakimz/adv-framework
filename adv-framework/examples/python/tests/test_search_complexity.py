@@ -47,6 +47,6 @@ def test_the_gate_actually_fires_on_a_wrong_declaration():
     harness that silently passed everything would look identical to a
     working one in this suite.
     """
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=r"bound exceeded"):
         bh.assert_complexity_bound(
             lambda data: has_duplicates(data), "O(n)", SIZES)
