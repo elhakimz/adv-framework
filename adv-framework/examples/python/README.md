@@ -55,6 +55,29 @@ sh ../../assets/python/pre-push.sh
 
 This time static, build, unit, and property should all pass.
 
+## Complexity bounds
+
+`tests/test_search_complexity.py` declares and verifies algorithmic
+complexity bounds for `calculator.search`, using the harness shipped at
+`assets/python/bigo_harness.py`. It counts container operations rather
+than timing anything, so results are reproducible.
+
+Run just those:
+
+```bash
+pytest tests/test_search_complexity.py -v
+```
+
+One of the three tests deliberately asserts that declaring `O(n)` for a
+quadratic routine **fails**. That test passing is what proves the gate
+is not vacuous — a harness that silently accepted everything would look
+identical to a working one without it.
+
+This verifies a *declared* bound against *counted* operations. It does not
+prove true complexity: `xs.count()` and `xs.index()` bypass the
+instrumentation entirely. See the harness module docstring for the full
+coverage map.
+
 ## A note on the diff-coverage check
 
 The hook's Unit stage includes a diff-coverage gate that compares your
