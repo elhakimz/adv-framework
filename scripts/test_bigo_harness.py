@@ -132,7 +132,7 @@ def test_uninstrumented_routine_fails_rather_than_passing_vacuously():
     def touches_nothing(data):
         return 42
 
-    with pytest.raises(AssertionError, match="not instrumented"):
+    with pytest.raises(AssertionError, match="zero operations counted"):
         bh.assert_complexity_bound(touches_nothing, "O(1)", SIZES)
 
 

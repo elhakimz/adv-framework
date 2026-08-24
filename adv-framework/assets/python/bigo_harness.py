@@ -137,8 +137,13 @@ def assert_complexity_bound(
 
     samples = measure_ops(routine, ordered, make_input=build)
 
-    # Guard 1: sanity floor. Catches TOTAL non-instrumentation only;
-    # partial instrumentation is caught by CountingList's wide coverage.
+    # Guard 1: sanity floor. Together, these catch TOTAL non-instrumentation
+    # only; partial instrumentation is caught by CountingList's wide protocol
+    # coverage. The first assertion (ops_last > 0) is logically fully subsumed
+    # by the second (ops_last > ops_first), since read counts are never
+    # negative -- if ops_last == 0 then 0 > ops_first is false for any
+    # ops_first >= 0. It is kept for the clearer error message on the common
+    # case of complete non-instrumentation, not for additional protection.
     n_first, ops_first = samples[0]
     n_last, ops_last = samples[-1]
     assert ops_last > 0, (
