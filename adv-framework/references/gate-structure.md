@@ -100,6 +100,18 @@ Nothing in a passing test suite penalizes a 200-line function, so agent-generate
 | Bun | Biome's `noExcessiveCognitiveComplexity` |
 | Rust | `clippy::cognitive_complexity` (allow-by-default nursery lint — does nothing until enabled; carries nursery false-positive caveats) |
 
+### Algorithmic complexity bounds
+
+A distinct axis from the complexity budget above: that one measures
+branching structure, this one measures asymptotic growth. A five-line
+function with no branches can be O(n^3).
+
+Declaring a bound and verifying it by counting operations is
+deterministic and belongs in the **Property** gate. See
+`references/complexity-bounds.md` for the technique, the calibrated
+parameters, and the coverage limits; `assets/python/bigo_harness.py`
+is a working implementation.
+
 ### Suite health
 
 A suite that passes only in one order, or passes only intermittently, is not a deterministic gate — it is a gate that sometimes lies, which is worse than no gate because it trains people to re-run instead of investigate. Best as a nightly/weekly job, same cost rationale as mutation testing.
