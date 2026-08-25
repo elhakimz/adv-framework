@@ -57,6 +57,16 @@ def quadratic_mixed(data):
     return total
 
 
+def nlogn_routine(data):                     # O(n log n)
+    """Doubling outer loop, iterating inner loop: log2(n) full passes."""
+    step = 1
+    n = len(data)
+    while step < n:
+        for _ in data:
+            pass
+        step *= 2
+
+
 SIZES = [16, 64, 256, 1024]                 # 64x span
 
 
@@ -124,6 +134,18 @@ def test_binary_fails_constant():
         bh.assert_complexity_bound(binary_probe, "O(1)", SIZES)
 
 
+def test_nlogn_routine_passes_nlogn_bound():
+    """O(n log n) is the bound this feature is motivated by -- the GROWTH
+    lambda for it has a distinct expression from every other entry and was
+    otherwise never exercised by any test."""
+    bh.assert_complexity_bound(nlogn_routine, "O(n log n)", SIZES)
+
+
+def test_quadratic_fails_nlogn_bound():
+    with pytest.raises(AssertionError, match=r"bound exceeded"):
+        bh.assert_complexity_bound(quadratic_mixed, "O(n log n)", SIZES)
+
+
 # --- guard 1: sanity floor -----------------------------------------------
 
 def test_uninstrumented_routine_fails_rather_than_passing_vacuously():
@@ -186,15 +208,27 @@ def test_log_bound_with_n0_of_1_does_not_divide_by_zero():
     """math.log2(1) == 0, so an unguarded C = ops(n0)/f(n0) raises.
 
     Only O(log n) with n0=1 reaches a zero denominator -- O(n) at n=1
-    gives f=1.0 and would not exercise the guard at all. Whether the
-    bound itself holds is irrelevant here; an AssertionError is a fine
-    outcome. A ZeroDivisionError is not, and would propagate and fail.
+    gives f=1.0 and would not exercise the guard at all. The zero
+    denominator is defended against with `f(n_first) or 1.0`, which makes
+    C = ops_first / 1.0 = 1 -- too small a constant for binary_probe's
+    actual growth, so the bound check itself fails with "bound exceeded".
+    A ZeroDivisionError would mean the `or 1.0` guard was removed; that
+    is not caught here and would propagate and fail the test.
     """
     assert math.log2(1) == 0
-    try:
+    with pytest.raises(AssertionError, match=r"bound exceeded"):
         bh.assert_complexity_bound(binary_probe, "O(log n)", [1, 64, 256])
-    except AssertionError:
-        pass
+
+
+def test_single_size_is_rejected():
+    with pytest.raises(AssertionError, match="at least two sizes"):
+        bh.assert_complexity_bound(linear_scan, "O(n)", [16])
+
+
+def test_large_tolerance_accepts_a_bound_that_fails_at_default():
+    with pytest.raises(AssertionError, match=r"bound exceeded"):
+        bh.assert_complexity_bound(quadratic_mixed, "O(n)", SIZES)
+    bh.assert_complexity_bound(quadratic_mixed, "O(n)", SIZES, tolerance=1e6)
 
 
 def test_unknown_bound_name_is_rejected_clearly():

@@ -19,14 +19,24 @@ HOW
     access; the routine under test is unmodified.
 
 LIMITATIONS
-    Counted:    xs[i] indexing, `for x in xs`, `y in xs`, sum/max/sorted
+    Counted:    xs[i] indexing, `for x in xs`, `y in xs`, sum/max
     Invisible:  xs.count(v), xs.index(v)  -- C-level list methods bypass
                 Python protocols. Routines relying on these need
                 element-level comparison counting, not container counting.
     Undercount: xs[10:20] slicing registers as 1 read for 10 elements.
+                sorted(xs) registers n reads for O(n log n) of comparison
+                work -- a routine that just sorts and returns passes a
+                declared O(n) bound.
+    Escape hatch: copying the input out of the instrumented container
+                (list(xs), set(xs), building a dict index) makes
+                everything done on the copy invisible -- only the first
+                pass, the copy itself, is counted.
     Not counted: len(xs) -- correct, it is genuinely O(1).
     Only container access is counted. Heavy per-element arithmetic is
     invisible: such a routine registers as O(n) regardless of its cost.
+    The determinism guard (see assert_complexity_bound) is PROBABILISTIC:
+    it compares two runs at the smallest size and a routine that varies
+    rarely can produce identical counts twice and slip through.
 """
 from __future__ import annotations
 
@@ -81,7 +91,7 @@ def measure_ops(
     *,
     make_input: Callable[[int], CountingList] | None = None,
 ) -> list[tuple[int, int]]:
-    """Return [(n, operations)] for each size, in the order given.
+    """Return [(n, operations)] for each size, in ascending size order.
 
     `routine` is always called as routine(data). Close over any extra
     arguments in a lambda.
@@ -135,7 +145,13 @@ def assert_complexity_bound(
         f"operations at n={ordered[0]}. Randomized algorithms must be seeded "
         f"to be gated.")
 
-    samples = measure_ops(routine, ordered, make_input=build)
+    # Reuse the guard's first measurement as sample 0 rather than drawing a
+    # third sample at the smallest size -- for a stateful routine, the guard
+    # could otherwise compare runs 1 and 2 successfully and then calibrate
+    # on a run the guard never saw.
+    samples = [(ordered[0], first.reads)]
+    if len(ordered) > 1:
+        samples += measure_ops(routine, ordered[1:], make_input=build)
 
     # Guard 1: sanity floor. Together, these catch TOTAL non-instrumentation
     # only; partial instrumentation is caught by CountingList's wide protocol

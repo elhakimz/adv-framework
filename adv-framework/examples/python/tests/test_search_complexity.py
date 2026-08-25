@@ -18,10 +18,18 @@ from calculator.search import contains, has_duplicates
 # adv-framework/examples/python/tests/ -> parents[3] == adv-framework/
 _HARNESS = (Path(__file__).resolve().parents[3]
             / "assets" / "python" / "bigo_harness.py")
-_spec = importlib.util.spec_from_file_location("bigo_harness", _HARNESS)
-bh = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = bh
-_spec.loader.exec_module(bh)
+try:
+    _spec = importlib.util.spec_from_file_location("bigo_harness", _HARNESS)
+    bh = importlib.util.module_from_spec(_spec)
+    sys.modules[_spec.name] = bh
+    _spec.loader.exec_module(bh)
+except FileNotFoundError as exc:
+    raise FileNotFoundError(
+        f"expected the harness at {_HARNESS}, derived from "
+        f"Path(__file__).resolve().parents[3] -- this file assumes it lives "
+        f"at adv-framework/examples/python/tests/. If you copied this test "
+        f"elsewhere, update that parents[3] assumption to point at the "
+        f"directory containing assets/python/bigo_harness.py.") from exc
 
 SIZES = [16, 64, 256, 1024]          # 64x span, satisfies MIN_SPAN
 

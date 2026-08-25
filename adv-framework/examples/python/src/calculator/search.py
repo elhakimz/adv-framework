@@ -14,10 +14,7 @@ def contains(haystack: list[int], needle: int) -> bool:
     single step. The explicit loop is what makes the growth observable
     per element.
     """
-    for item in haystack:
-        if item == needle:
-            return True
-    return False
+    return any(item == needle for item in haystack)
 
 
 def has_duplicates(values: list[int]) -> bool:

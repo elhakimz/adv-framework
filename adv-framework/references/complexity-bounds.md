@@ -6,7 +6,7 @@ satisfies every unit and property test, matches its golden files, and
 smoke-tests green. It surfaces in production as a timeout under load.
 
 **This is a different axis from the complexity budget** in
-`gate-structure.md`. That measures cyclomatic/cognitive complexity —
+`references/gate-structure.md`. That measures cyclomatic/cognitive complexity —
 branching structure. A five-line function with no branches can be O(n^3).
 Do not treat one as covering the other.
 
@@ -36,7 +36,7 @@ Every off-the-shelf option measures wall-clock time:
 | JMH | Java | Wall-clock | No — benchmarks, does not assert bounds |
 
 Timing varies with CI runner load and thermal state. A timing-based check
-is a flaky gate, and `security.md` already warns that a check which cries
+is a flaky gate, and `references/security.md` already warns that a check which cries
 wolf trains people to ignore it.
 
 Operation counting is chosen **deliberately against the grain**, and the
@@ -100,8 +100,9 @@ never a warning.
 | `xs[i]` | Yes |
 | `for x in xs` | Yes |
 | `y in xs` | Yes (charged as `len(xs)` in one step) |
-| `sum(xs)`, `max(xs)`, `sorted(xs)` | Yes |
+| `sum(xs)`, `max(xs)` | Yes |
 | `xs[10:20]` | Undercounts — 1 read for 10 elements |
+| `sorted(xs)` | **Undercounts** — registers n reads for O(n log n) of comparison work. A routine that just sorts and returns passes a declared O(n) bound |
 | `xs.count(v)`, `xs.index(v)` | **Invisible** — C-level methods bypass Python protocols |
 | `len(xs)` | Not counted — correct, genuinely O(1) |
 
@@ -118,6 +119,15 @@ declared O(n) bound. All three protocols are load-bearing.
   such a routine registers as O(n) regardless of cost.
 - Routines relying on `.count()` or `.index()` need element-level
   comparison counting instead — instrument the objects, not the container.
+- Once a routine copies the input out of the instrumented container
+  (`list(xs)`, `set(xs)`, building a dict index), everything done on the
+  copy is invisible — only the first pass, the copy itself, is counted.
+  This escape hatch is more likely to appear in real code than
+  `.count()`/`.index()`: "defensively copy the argument, then work on the
+  copy" is a common pattern that happens to defeat this gate.
+- The determinism guard (guard 3, above) is **probabilistic, not a
+  guarantee**: it compares two runs at the smallest size, and a routine
+  that varies rarely can produce identical counts twice and slip through.
 - Python only. The technique transfers to any language with an
   interceptable collection type, but no other language ships an asset.
 
@@ -127,3 +137,9 @@ declared O(n) bound. All three protocols are load-bearing.
 `examples/python/tests/test_search_complexity.py` is a worked example
 against real routines, including one test that proves the gate fires on a
 wrong declaration.
+
+The usage snippet above assumes `bigo_harness` is importable. Either copy
+`bigo_harness.py` into your own test directory and import it normally, or
+load it directly by path — see how
+`examples/python/tests/test_search_complexity.py` does this with
+`importlib.util.spec_from_file_location`, which needs no install step.
