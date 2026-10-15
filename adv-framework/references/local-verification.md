@@ -57,6 +57,54 @@ once per machine:
 | Bun | `bun install --frozen-lockfile`, `pip install lcov_cobertura`, `pip install diff-cover` |
 | Rust | `cargo install cargo-nextest cargo-llvm-cov cargo-audit cargo-deny --locked`, `rustup component add llvm-tools-preview`, `pip install diff-cover` |
 
+## Autofix tier
+
+An opt-in step, Java only so far, that *fixes* what the static gate
+*verifies*. It is kept apart from the gates because the two have opposite
+properties: a gate is read-only and reproducible; a fixer rewrites code.
+
+Rules that keep it from becoming a loophole:
+
+- **Fixing is local; CI only verifies.** CI runs `spotless:check`,
+  `checkstyle:check` and `pmd:check` and never applies anything — a
+  pipeline that rewrites code after review means what merges is not what
+  was reviewed. The pre-push hook also only verifies: a hook that edits the
+  working tree mid-push would push the unfixed commits.
+- **A fix is not trusted until the gates pass on it.** `autofix.sh` never
+  stages or commits, prints the diff for review, re-runs the CI static
+  commands to list whatever it could not fix, and re-runs unit tests when
+  OpenRewrite ran (it changes code, a formatter only changes layout).
+- **The config sits behind the existing guardrails.** The Spotless
+  version pins and the OpenRewrite recipe list live in `pom.xml`, which is
+  already `CODEOWNERS`-protected and `ask` in the agent permission scope;
+  the `-Dspotless.skip`, `-Dcheckstyle.skip` and `-Dpmd.skip` flags are
+  denied there, so an agent cannot go green by switching a check off.
+
+What it can and cannot fix:
+
+| Finding | Fixed by | Autofix? |
+|---|---|---|
+| Formatting, import order, unused imports (Checkstyle `google_checks.xml`) | Spotless + google-java-format | Yes |
+| Unused locals / private fields / private methods, missing `@Override`, final utility classes, literals-first comparisons (PMD) | OpenRewrite recipes in the pom's `autofix` profile | Yes, mechanical cases only |
+| Any other PMD rule (most design and error-prone rules) | — | No: fix by hand or with an agent, then the gates verify it |
+
+The shipped PMD rulesets are `bestpractices`, `errorprone` and `design`, not
+`codestyle`, so Spotless mostly clears **Checkstyle** findings here, not PMD
+ones. If you add PMD's codestyle category, run the tools and confirm they
+agree rather than assuming the formatter satisfies it.
+
+Install once per project, next to the pre-push hook:
+
+```bash
+cp adv-framework/assets/java/autofix.sh .githooks/autofix.sh
+chmod +x .githooks/autofix.sh
+sh .githooks/autofix.sh
+```
+
+It refuses to run on a dirty tree so the autofix diff can be reviewed on its
+own (`ADV_AUTOFIX_ALLOW_DIRTY=1` overrides). `ADV_AUTOFIX_REWRITE=0` runs
+Spotless only.
+
 ## Installing the hook
 
 A runnable example with the hook already wired up lives at
