@@ -15,6 +15,13 @@
     <checkstyle.version>3.5.0</checkstyle.version>
     <checkstyle.rules.version>10.18.1</checkstyle.rules.version>
     <pmd.version>3.25.0</pmd.version>
+    <!-- Autofix tier (local only — see references/local-verification.md).
+         Pin exact versions: an unpinned formatter reformats the whole
+         codebase on upgrade and breaks reproducibility of spotless:check. -->
+    <spotless.version>3.10.2</spotless.version>
+    <google-java-format.version>1.30.0</google-java-format.version>
+    <rewrite-maven-plugin.version>6.29.0</rewrite-maven-plugin.version>
+    <rewrite-static-analysis.version>2.40.0</rewrite-static-analysis.version>
 </properties>
 
 <dependencies>
@@ -75,6 +82,29 @@
             </configuration>
         </plugin>
 
+        <!-- Formatting gate. CI and pre-push run `mvn spotless:check` (verify
+             only, never modifies files). The matching fixer is `spotless:apply`,
+             run locally via autofix.sh — it is deliberately NOT bound to a
+             lifecycle phase, same as checkstyle:check / pmd:check above, so a
+             normal build can never silently rewrite sources.
+             GOOGLE style matches google_checks.xml (2-space indent, import
+             order) so Spotless and Checkstyle do not undo each other. If you
+             swap the Checkstyle config for a custom one, keep the two aligned. -->
+        <plugin>
+            <groupId>com.diffplug.spotless</groupId>
+            <artifactId>spotless-maven-plugin</artifactId>
+            <version>${spotless.version}</version>
+            <configuration>
+                <java>
+                    <googleJavaFormat>
+                        <version>${google-java-format.version}</version>
+                        <style>GOOGLE</style>
+                    </googleJavaFormat>
+                    <removeUnusedImports/>
+                </java>
+            </configuration>
+        </plugin>
+
         <!-- ================= UNIT + COVERAGE LAYER ================= -->
 
         <plugin>
@@ -120,6 +150,51 @@
 </build>
 
 <profiles>
+    <!-- ================= AUTOFIX PROFILE (local only, never CI) ================= -->
+    <!-- Rewrites source to clear PMD findings that have a safe mechanical fix.
+         Run through autofix.sh, which reviews/re-verifies afterwards. This is NOT
+         a gate: CI never activates this profile, and a rewrite is not trusted
+         until the static + unit + property gates pass on the result.
+         Formatting is Spotless's job (above); OpenRewrite only handles the
+         semantic cases a formatter cannot touch. Coverage is partial — most PMD
+         rules (design, error-prone) have no autofix and still need a human or
+         an agent fix, which the gates then verify. -->
+    <profile>
+        <id>autofix</id>
+        <build>
+            <plugins>
+                <plugin>
+                    <groupId>org.openrewrite.maven</groupId>
+                    <artifactId>rewrite-maven-plugin</artifactId>
+                    <version>${rewrite-maven-plugin.version}</version>
+                    <configuration>
+                        <activeRecipes>
+                            <!-- PMD UnusedLocalVariable -->
+                            <recipe>org.openrewrite.staticanalysis.RemoveUnusedLocalVariables</recipe>
+                            <!-- PMD UnusedPrivateField -->
+                            <recipe>org.openrewrite.staticanalysis.RemoveUnusedPrivateFields</recipe>
+                            <!-- PMD UnusedPrivateMethod -->
+                            <recipe>org.openrewrite.staticanalysis.RemoveUnusedPrivateMethods</recipe>
+                            <!-- PMD MissingOverride -->
+                            <recipe>org.openrewrite.staticanalysis.MissingOverrideAnnotation</recipe>
+                            <!-- PMD ClassWithOnlyPrivateConstructorsShouldBeFinal -->
+                            <recipe>org.openrewrite.staticanalysis.FinalClass</recipe>
+                            <!-- PMD LiteralsFirstInComparisons -->
+                            <recipe>org.openrewrite.staticanalysis.EqualsAvoidsNull</recipe>
+                        </activeRecipes>
+                    </configuration>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.openrewrite.recipe</groupId>
+                            <artifactId>rewrite-static-analysis</artifactId>
+                            <version>${rewrite-static-analysis.version}</version>
+                        </dependency>
+                    </dependencies>
+                </plugin>
+            </plugins>
+        </build>
+    </profile>
+
     <!-- ================= PROPERTY / INVARIANT PROFILE ================= -->
     <profile>
         <id>property-tests</id>

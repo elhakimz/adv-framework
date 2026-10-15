@@ -32,6 +32,19 @@ cache:
 # STAGE 1: STATIC — cheapest, fastest, fails first
 # ---------------------------------------------------------------------------
 
+# Formatting gate — VERIFY ONLY. CI must never run spotless:apply or the
+# autofix profile: a pipeline that rewrites code after review means what merges
+# is not what was reviewed. Fixing happens locally (assets/java/autofix.sh),
+# then the fix is committed and re-verified here.
+spotless-check:
+  stage: static
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - mvn $MAVEN_CLI_OPTS spotless:check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
 checkstyle:
   stage: static
   image: maven:3.9-eclipse-temurin-21

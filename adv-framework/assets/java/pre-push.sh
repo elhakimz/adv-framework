@@ -8,6 +8,8 @@
 # CI + CODEOWNERS are what actually gate a merge. See
 # adv-framework/references/local-verification.md before wiring this up.
 #
+# This hook only VERIFIES (spotless:check). It never rewrites files — a hook
+# that edits the working tree during a push would push the unfixed commits.
 # sast/dependency_scanning/secret_detection are GitLab-template jobs with
 # no local CLI equivalent — intentionally not mirrored here.
 #
@@ -37,10 +39,15 @@ run_stage() {
 }
 
 run_stage "static" \
+  "mvn $MAVEN_CLI_OPTS spotless:check" \
   "mvn $MAVEN_CLI_OPTS checkstyle:check" \
   "mvn $MAVEN_CLI_OPTS pmd:check" \
   "semgrep scan --config .semgrep/rules.yml --error"
-[ "$fail" -eq 1 ] && exit 1
+if [ "$fail" -eq 1 ]; then
+  echo "Formatting / PMD findings? The opt-in autofix script can clear the mechanical ones:"
+  echo "  sh .githooks/autofix.sh   (see references/local-verification.md, Autofix tier)"
+  exit 1
+fi
 
 run_stage "build" \
   "mvn $MAVEN_CLI_OPTS compile"
